@@ -1,3 +1,4 @@
+*.bak
 onenote_audit/
 venv/
 __pycache__/
