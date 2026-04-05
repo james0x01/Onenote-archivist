@@ -1,0 +1,5 @@
+onenote_audit/
+venv/
+__pycache__/
+.DS_Store
+
