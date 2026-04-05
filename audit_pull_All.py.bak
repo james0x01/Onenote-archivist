@@ -1,0 +1,100 @@
+import msal
+import requests
+import os
+import re
+import json
+import warnings
+from bs4 import BeautifulSoup
+
+# Suppress SSL/LibreSSL warnings
+warnings.filterwarnings("ignore", category=UserWarning, module='urllib3')
+
+# --- CONFIGURATION ---
+CLIENT_ID = 'INSERT CLIENT ID'
+
+def get_access_token():
+    authority = "https://login.microsoftonline.com/consumers"
+    # Keeping the "Golden Trio" of scopes for maximum compatibility
+    scopes = ["User.Read", "Notes.Read", "Notes.Read.All"]
+    
+    app = msal.PublicClientApplication(CLIENT_ID, authority=authority)
+
+    # Wipe cache for a fresh login session
+    for account in app.get_accounts():
+        app.remove_account(account)
+
+    print("Opening browser for interactive login...")
+    # This triggers the "One-Click" login (requires http://localhost in Azure)
+    result = app.acquire_token_interactive(scopes=scopes)
+
+    if "access_token" in result:
+        print("Token acquired successfully!\n")
+        return result["access_token"]
+    else:
+        print(f"Auth Error: {result.get('error_description')}")
+        return None
+
+# --- EXECUTION ---
+token = get_access_token()
+
+if not token:
+    print("Authentication failed. Exiting.")
+    exit(1)
+
+headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+# Root Audit Directory
+root_audit_dir = os.path.join("onenote_audit", "01_Raw_Audit")
+os.makedirs(root_audit_dir, exist_ok=True)
+
+# 1. Fetch ALL Notebooks
+print("Fetching all notebooks in your account...")
+api_url = "https://graph.microsoft.com/v1.0/me/onenote/notebooks"
+nb_resp = requests.get(api_url, headers=headers).json()
+
+notebooks = nb_resp.get('value', [])
+
+if not notebooks:
+    print("No notebooks found in this account.")
+    exit()
+
+print(f"Found {len(notebooks)} notebooks. Starting full archive...\n")
+
+for notebook in notebooks:
+    # Clean Notebook Name for folder safety
+    nb_name = re.sub(r'[\\/*?:"<>|]', "", notebook['displayName'])
+    nb_dir = os.path.join(root_audit_dir, nb_name)
+    os.makedirs(nb_dir, exist_ok=True)
+    
+    print(f"--- ARCHIVING NOTEBOOK: {nb_name} ---")
+    
+    # 2. Fetch Sections for this Notebook
+    sections_url = f"https://graph.microsoft.com/v1.0/me/onenote/notebooks/{notebook['id']}/sections"
+    sections = requests.get(sections_url, headers=headers).json().get('value', [])
+
+    for section in sections:
+        section_name = re.sub(r'[\\/*?:"<>|]', "", section['displayName'])
+        
+        # 3. Fetch Pages for this Section
+        sec_pages_url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section['id']}/pages"
+        pages_resp = requests.get(sec_pages_url, headers=headers).json()
+        pages = pages_resp.get('value', [])
+
+        for page in pages:
+            title = re.sub(r'[\\/*?:"<>|]', "", page.get('title') or "Untitled_Page")
+            
+            # Directory: Raw_Audit / Notebook / Section / Page
+            page_dir = os.path.join(nb_dir, section_name, title)
+            os.makedirs(page_dir, exist_ok=True)
+
+            # Download HTML content
+            content_resp = requests.get(page['contentUrl'], headers=headers)
+            if content_resp.status_code == 200:
+                with open(os.path.join(page_dir, "index.html"), "w", encoding='utf-8') as f:
+                    f.write(content_resp.text)
+                print(f"  [{nb_name}] > {section_name} > {title}")
+            else:
+                print(f"  FAILED to download page: {title}")
+
+print("\n--- FULL ACCOUNT AUDIT COMPLETE ---")
+print(f"All files are located in: {os.path.abspath(root_audit_dir)}")

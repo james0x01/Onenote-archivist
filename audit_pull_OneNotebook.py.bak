@@ -1,0 +1,141 @@
+import msal
+import requests
+import os
+import re
+import json
+import warnings
+import base64
+from bs4 import BeautifulSoup
+
+# Suppress SSL/LibreSSL warnings
+warnings.filterwarnings("ignore", category=UserWarning, module='urllib3')
+
+# --- CONFIGURATION ---
+CLIENT_ID = 'INSERT CLIENT ID'
+NOTEBOOK_NAME = "Book-Idea"
+
+
+def decode_token_claims(token):
+    """Decode JWT payload (no signature verification) for debugging."""
+    try:
+        payload = token.split('.')[1]
+        # Add padding if needed
+        payload += '=' * (4 - len(payload) % 4)
+        decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
+        return decoded
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def get_access_token():
+    authority = "https://login.microsoftonline.com/consumers"
+    # Added User.Read — required for Graph tokens to be valid even for Notes endpoints
+    scopes = ["User.Read", "Notes.Read", "Notes.Read.All"]
+
+    app = msal.PublicClientApplication(CLIENT_ID, authority=authority)
+
+    # Wipe cache so we always get a fresh token
+    for account in app.get_accounts():
+        app.remove_account(account)
+
+    flow = app.initiate_device_flow(scopes=scopes)
+    if "user_code" not in flow:
+        print("Error: Could not create device flow.")
+        print("Check Azure portal: App Registration > Authentication > 'Allow public client flows' must be ON.")
+        print(f"Flow response: {flow}")
+        return None
+
+    print(f"\n{flow['message']}")
+    result = app.acquire_token_by_device_flow(flow)
+
+    if "access_token" not in result:
+        print("\n--- TOKEN ACQUISITION FAILED ---")
+        print(f"Error: {result.get('error')}")
+        print(f"Description: {result.get('error_description')}")
+        return None
+
+    token = result["access_token"]
+    print("\n--- TOKEN ACQUIRED ---")
+    claims = decode_token_claims(token)
+    print(f"Audience (aud): {claims.get('aud')}")
+    print(f"Scopes granted: {claims.get('scp')}")
+    print(f"Token type: {result.get('token_type')}")
+    return token
+
+
+# --- EXECUTION ---
+token = get_access_token()
+
+if not token:
+    print("Authentication failed. Exiting.")
+    exit(1)
+
+headers = {
+    'Authorization': f'Bearer {token}',
+    'Content-Type': 'application/json'
+}
+
+# Sanity check: verify token works at all against /me
+print("\nVerifying token against /me endpoint...")
+me_resp = requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
+if me_resp.status_code != 200:
+    print(f"Token rejected by /me ({me_resp.status_code}): {me_resp.text}")
+    exit(1)
+print(f"Token valid. Signed in as: {me_resp.json().get('displayName')} ({me_resp.json().get('mail') or me_resp.json().get('userPrincipalName')})")
+
+base_dir = "onenote_audit/01_Raw_Audit"
+os.makedirs(base_dir, exist_ok=True)
+
+print(f"\nSearching for notebook: {NOTEBOOK_NAME}...")
+
+api_url = "https://graph.microsoft.com/v1.0/me/onenote/notebooks"
+response = requests.get(api_url, headers=headers)
+
+if response.status_code != 200:
+    print(f"\n--- API ERROR ({response.status_code}) ---")
+    print(response.text)
+    exit(1)
+
+nb_resp = response.json()
+try:
+    notebook = next(nb for nb in nb_resp['value'] if nb['displayName'] == NOTEBOOK_NAME)
+    notebook_id = notebook['id']
+    print(f"Success! Found Notebook ID: {notebook_id}")
+
+    # Fetch pages (notebooks/{id}/pages only returns pages at root — use sections for full tree)
+    pages_url = f"https://graph.microsoft.com/v1.0/me/onenote/notebooks/{notebook_id}/sections"
+    sections_resp = requests.get(pages_url, headers=headers).json()
+    sections = sections_resp.get('value', [])
+    print(f"Found {len(sections)} section(s).")
+
+    all_pages = []
+    for section in sections:
+        sec_pages_url = f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section['id']}/pages"
+        sec_pages_resp = requests.get(sec_pages_url, headers=headers).json()
+        sec_pages = sec_pages_resp.get('value', [])
+        for page in sec_pages:
+            page['_section'] = section['displayName']
+        all_pages.extend(sec_pages)
+
+    print(f"Found {len(all_pages)} total pages. Starting download...")
+
+    for page in all_pages:
+        section_name = re.sub(r'[\\/*?:"<>|]', "", page.get('_section', 'Unknown_Section'))
+        title = re.sub(r'[\\/*?:"<>|]', "", page.get('title') or "Untitled_Page")
+        page_dir = os.path.join(base_dir, section_name, title)
+        os.makedirs(page_dir, exist_ok=True)
+
+        content_resp = requests.get(page['contentUrl'], headers=headers)
+        if content_resp.status_code == 200:
+            with open(os.path.join(page_dir, "index.html"), "w", encoding='utf-8') as f:
+                f.write(content_resp.text)
+            print(f"  Archived: [{section_name}] {title}")
+        else:
+            print(f"  FAILED ({content_resp.status_code}): [{section_name}] {title}")
+
+except StopIteration:
+    print(f"Error: Notebook '{NOTEBOOK_NAME}' not found.")
+    print(f"Available notebooks: {[nb['displayName'] for nb in nb_resp.get('value', [])]}")
+
+print("\n--- PROCESS COMPLETE ---")
+
