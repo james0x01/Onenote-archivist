@@ -155,13 +155,17 @@ def get_sections_recursive(notebook_id, headers):
 
 def download_media(soup, media_dir, headers):
     """
-    Download all images and drawings from a OneNote page.
-    OneNote uses both 'src' and 'data-fullres-src'; we prefer the full-res version.
+    Download all images, drawings, and attachments from a OneNote page.
+    - Images: <img src> and <img data-fullres-src> (prefers full-res)
+    - Attachments: <object data-attachment> (Word, PowerPoint, PDF, etc.)
     Updates the soup in-place so saved HTML points to local files.
     """
     os.makedirs(media_dir, exist_ok=True)
+    attachments_dir = os.path.join(os.path.dirname(media_dir), "attachments")
     media_count = 0
+    attachment_count = 0
 
+    # --- Images ---
     for i, img in enumerate(soup.find_all('img')):
         # Prefer full-res source; fall back to standard src
         img_url = img.get('data-fullres-src') or img.get('src') or ""
@@ -194,7 +198,31 @@ def download_media(soup, media_dir, headers):
 
         media_count += 1
 
-    return media_count
+    # --- Attachments (Word, PowerPoint, PDF, etc.) ---
+    for obj in soup.find_all('object', attrs={'data-attachment': True}):
+        filename = re.sub(r'[\\/*?:"<>|]', "", obj.get('data-attachment', 'attachment'))
+        attach_url = obj.get('data', '')
+
+        if not attach_url.startswith('http'):
+            continue
+
+        resp = graph_get(attach_url, headers)
+        if resp is None:
+            print(f"    [Attachment skip] Could not download: {filename}")
+            continue
+
+        os.makedirs(attachments_dir, exist_ok=True)
+        filepath = os.path.join(attachments_dir, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(resp.content)
+
+        # Update the object tag to point locally
+        obj['data'] = f"attachments/{filename}"
+        attachment_count += 1
+        print(f"    [Attachment] Saved: {filename}")
+
+    return media_count, attachment_count
 
 
 # ---------------------------------------------------------------------------
@@ -273,15 +301,15 @@ for nb_idx, notebook in enumerate(notebooks, 1):
 
             soup = BeautifulSoup(content_resp.text, 'html.parser')
 
-            # --- Download all media ---
-            media_count = download_media(soup, media_dir, headers)
+            # --- Download all media and attachments ---
+            media_count, attachment_count = download_media(soup, media_dir, headers)
 
             # --- Save updated HTML ---
             with open(os.path.join(page_dir, "index.html"), "w", encoding='utf-8') as f:
                 f.write(str(soup))
 
             total_pages += 1
-            print(f"    Archived [{media_count} media]: {section_name} > {title}")
+            print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
 
 print(f"\n--- ARCHIVE COMPLETE ---")
 print(f"  Pages archived : {total_pages}")
