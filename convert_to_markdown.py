@@ -1,51 +1,43 @@
 import os
 import re
-import base64
 import requests
+import PIL.Image
+import google.generativeai as genai
 from pathlib import Path
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
+from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION
 # ---------------------------------------------------------------------------
 
-OLLAMA_HOST    = "http://10.254.254.48:11434"
-VISION_MODEL   = "gemma3:12b"
+load_dotenv()
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
+VISION_MODEL    = "gemini-1.5-flash"
 DESCRIBE_IMAGES = True   # Set to False for a fast run without image descriptions
 
 RAW_DIR = Path("onenote_audit/01_Raw_Audit")
 MD_DIR  = Path("onenote_audit/02_Markdown")
 
 # ---------------------------------------------------------------------------
-# OLLAMA VISION
+# GEMINI VISION
 # ---------------------------------------------------------------------------
 
 def describe_image(image_path):
-    """Send a local image to Ollama and return a plain-text description."""
+    """Send a local image to Gemini and return a plain-text description."""
     try:
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-
-        resp = requests.post(
-            f"{OLLAMA_HOST}/api/generate",
-            json={
-                "model": VISION_MODEL,
-                "prompt": (
-                    "Describe this image in detail for use in a technical document. "
-                    "If it contains text, transcribe it exactly. "
-                    "If it shows a diagram, chart, network map, or technical drawing, "
-                    "explain precisely what it depicts. Be thorough."
-                ),
-                "images": [b64],
-                "stream": False,
-            },
-            timeout=180,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("response", "").strip()
-        print(f"      [Ollama {resp.status_code}]: {resp.text[:200]}")
-        return None
+        img = PIL.Image.open(image_path)
+        response = genai.GenerativeModel(VISION_MODEL).generate_content([
+            (
+                "Describe this image in detail for use in a technical document. "
+                "If it contains text, transcribe it exactly. "
+                "If it shows a diagram, chart, network map, or technical drawing, "
+                "explain precisely what it depicts. Be thorough."
+            ),
+            img,
+        ])
+        return response.text.strip()
     except Exception as e:
         print(f"      [Image description error]: {e}")
         return None
@@ -173,33 +165,25 @@ print("  OneNote HTML → Markdown Converter")
 print("=" * 60)
 print(f"  Source : {RAW_DIR.resolve()}")
 print(f"  Output : {MD_DIR.resolve()}")
-print(f"  Ollama : {OLLAMA_HOST}")
-print(f"  Model  : {VISION_MODEL}")
-print(f"  Images : {'Describe via Ollama' if DESCRIBE_IMAGES else 'Reference only (fast mode)'}")
+print(f"  Model  : {VISION_MODEL} (Gemini)")
+print(f"  Images : {'Describe via Gemini' if DESCRIBE_IMAGES else 'Reference only (fast mode)'}")
 print()
 
-# --- Test Ollama connection ---
-print("Testing Ollama connection...")
-try:
-    r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
-    if r.status_code == 200:
-        available = [m["name"] for m in r.json().get("models", [])]
-        model_found = any(VISION_MODEL in m for m in available)
-        if DESCRIBE_IMAGES and not model_found:
-            print(f"  WARNING: {VISION_MODEL} not found on Ollama server.")
-            print(f"  Available models: {available}")
+# --- Initialise Gemini ---
+if DESCRIBE_IMAGES:
+    if not GEMINI_API_KEY:
+        print("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
+        DESCRIBE_IMAGES = False
+    else:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            # Quick test call to confirm the key and model are valid
+            genai.GenerativeModel(VISION_MODEL).generate_content("hello")
+            print(f"  Gemini ready. Model: {VISION_MODEL}\n")
+        except Exception as e:
+            print(f"  WARNING: Gemini initialisation failed: {e}")
             print(f"  Disabling image descriptions.\n")
             DESCRIBE_IMAGES = False
-        else:
-            status = f"{VISION_MODEL} ready" if DESCRIBE_IMAGES else "connected"
-            print(f"  Ollama {status}.\n")
-    else:
-        print(f"  WARNING: Ollama returned {r.status_code}. Disabling image descriptions.\n")
-        DESCRIBE_IMAGES = False
-except Exception as e:
-    print(f"  WARNING: Cannot reach Ollama at {OLLAMA_HOST}: {e}")
-    print(f"  Disabling image descriptions.\n")
-    DESCRIBE_IMAGES = False
 
 # --- Walk and convert ---
 total_converted = 0
