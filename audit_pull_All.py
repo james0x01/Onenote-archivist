@@ -42,11 +42,23 @@ def get_access_token():
 # GRAPH HELPERS
 # ---------------------------------------------------------------------------
 
-CALL_DELAY = 1.5  # seconds between every API call — ~40 req/min, well under Graph limits
+CALL_DELAY        = 2.0   # seconds between every API call — ~30 req/min
+REQUEST_LIMIT     = 80    # proactive pause after this many requests
+REQUEST_PAUSE     = 120   # seconds to pause when limit is reached
+_request_counter  = 0     # tracks total API calls made this session
 
 def graph_get(url, headers, retries=6):
     """GET a Graph URL with a courtesy delay + exponential backoff on errors."""
-    time.sleep(CALL_DELAY)  # throttle every call, including media downloads
+    global _request_counter
+    _request_counter += 1
+
+    # Proactive pause every REQUEST_LIMIT calls — prevents hitting the rate limit
+    # inside large notebooks before Microsoft has a chance to throttle us
+    if _request_counter % REQUEST_LIMIT == 0:
+        print(f"  [Proactive pause — {_request_counter} requests made. Waiting {REQUEST_PAUSE}s...]")
+        time.sleep(REQUEST_PAUSE)
+
+    time.sleep(CALL_DELAY)  # courtesy delay on every call
     for attempt in range(retries):
         try:
             resp = requests.get(url, headers=headers, timeout=30)
