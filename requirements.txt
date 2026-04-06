@@ -1,0 +1,26 @@
+# OneNote Archiver — required packages
+# Install all at once with: pip install -r requirements.txt
+
+# --- Authentication & API ---
+msal                   # Microsoft authentication (OneNote access)
+requests               # HTTP requests to Microsoft Graph API
+
+# --- HTML Parsing ---
+beautifulsoup4         # Parses OneNote HTML content
+
+# --- Markdown Conversion ---
+markdownify            # Converts HTML to Markdown
+
+# --- Attachment Extraction ---
+python-docx            # Extracts text from Word documents (.docx)
+python-pptx            # Extracts text from PowerPoint files (.pptx)
+pypdf                  # Extracts text from PDF files (.pdf)
+openpyxl               # Extracts text from Excel files (.xlsx)
+# csv and pathlib are built into Python — no install needed
+
+# --- Image Descriptions ---
+Pillow                 # Image file handling
+google-generativeai    # Gemini API for image descriptions
+
+# --- Environment / Secrets ---
+python-dotenv          # Loads CLIENT_ID and GEMINI_API_KEY from .env file
