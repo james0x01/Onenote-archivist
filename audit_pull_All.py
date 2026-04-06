@@ -75,10 +75,21 @@ CALL_DELAY        = 2.0   # seconds between every API call — ~30 req/min
 REQUEST_LIMIT     = 80    # proactive pause after this many requests
 REQUEST_PAUSE     = 120   # seconds to pause when limit is reached
 _request_counter  = 0     # tracks total API calls made this session
+_consecutive_429s = 0     # tracks back-to-back 429s across all calls
+
+
+def safe_log(msg):
+    """Log to screen and file if the log file is open, otherwise just print."""
+    print(msg)
+    try:
+        _log_file.write(msg + "\n")
+    except Exception:
+        pass  # log file may not be open yet during early auth calls
+
 
 def graph_get(url, headers, retries=6):
     """GET a Graph URL with a courtesy delay + exponential backoff on errors."""
-    global _request_counter
+    global _request_counter, _consecutive_429s
     _request_counter += 1
 
     # Proactive pause every REQUEST_LIMIT calls — prevents hitting the rate limit
@@ -93,25 +104,39 @@ def graph_get(url, headers, retries=6):
             resp = requests.get(url, headers=headers, timeout=30)
 
             if resp.status_code == 200:
+                _consecutive_429s = 0   # reset on any success
                 return resp
 
             elif resp.status_code == 429:
-                # Always print the body — Microsoft often says exactly how long to wait
+                _consecutive_429s += 1
                 body_preview = resp.text[:500]
-                # Honour Retry-After if present; otherwise exponential backoff (30, 60, 120…)
                 retry_after = resp.headers.get("Retry-After")
                 wait = int(retry_after) if retry_after else 30 * (2 ** attempt)
                 print(f"  [429 Rate limited — attempt {attempt+1}/{retries}] Waiting {wait}s")
                 print(f"  Server message: {body_preview}")
+
+                # Two consecutive 429s means the backoff isn't clearing the throttle
+                if _consecutive_429s >= 2:
+                    safe_log(f"\n[FATAL] Received {_consecutive_429s} consecutive 429 errors.")
+                    safe_log(f"[FATAL] Microsoft is still throttling after waiting. Exiting gracefully.")
+                    safe_log(f"[FATAL] Resume by re-running the script — already-archived pages will be skipped.")
+                    try:
+                        _log_file.close()
+                    except Exception:
+                        pass
+                    sys.exit(1)
+
                 time.sleep(wait)
 
             elif resp.status_code == 401:
+                _consecutive_429s = 0
                 print(f"  [401 Unauthorized] Token expired or missing permission.")
                 print(f"  URL: {url}")
                 print(f"  Response: {resp.text[:300]}")
                 return None
 
             else:
+                _consecutive_429s = 0
                 print(f"  [HTTP {resp.status_code}] {url}")
                 print(f"  Response: {resp.text[:300]}")
                 return None
