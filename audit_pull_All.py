@@ -323,14 +323,16 @@ for i, nb in enumerate(notebooks, 1):
     print(f"  {i:>2}. {nb['displayName']}")
 
 print()
+print("  a           — pull all notebooks")
 print("  s <numbers> — skip these notebooks       e.g. s 1 3 5")
 print("  p <numbers> — pull only these notebooks  e.g. p 2 4")
-print("  Enter       — process all notebooks")
 print()
 
 selection = input("Your choice: ").strip().lower()
 
-if selection.startswith("s "):
+if selection == "a" or selection == "":
+    print(f"\nProcessing all {len(notebooks)} notebooks.\n")
+elif selection.startswith("s "):
     skip_nums = set(int(x) for x in selection[2:].split() if x.isdigit())
     notebooks = [nb for i, nb in enumerate(notebooks, 1) if i not in skip_nums]
     print(f"\nSkipping {len(skip_nums)} notebook(s). Processing {len(notebooks)}.\n")
@@ -339,7 +341,7 @@ elif selection.startswith("p "):
     notebooks = [nb for i, nb in enumerate(notebooks, 1) if i in pull_nums]
     print(f"\nPulling {len(notebooks)} notebook(s).\n")
 else:
-    print(f"\nProcessing all {len(notebooks)} notebooks.\n")
+    print(f"\nUnrecognised input — processing all {len(notebooks)} notebooks.\n")
 
 # Log the final selection
 log(f"Notebooks selected for this run:")
