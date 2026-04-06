@@ -6,6 +6,7 @@ import sys
 import json
 import warnings
 import time
+from datetime import datetime
 from bs4 import BeautifulSoup
 
 warnings.filterwarnings("ignore", category=UserWarning, module='urllib3')
@@ -265,6 +266,20 @@ headers = {'Authorization': f'Bearer {token}'}
 root_audit_dir = os.path.join("onenote_audit", "01_Raw_Audit")
 os.makedirs(root_audit_dir, exist_ok=True)
 
+# --- Log file setup ---
+# Named with timestamp so each run gets its own file — never overwritten
+log_path = os.path.join(
+    "onenote_audit",
+    f"archive_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+)
+_log_file = open(log_path, "w", encoding="utf-8", buffering=1)  # buffering=1 = line-buffered (writes instantly)
+print(f"Logging to: {log_path}\n")
+
+def log(msg=""):
+    """Print to screen and write to log file immediately."""
+    print(msg)
+    _log_file.write(msg + "\n")
+
 # --- Verify token ---
 me = graph_get(f"{GRAPH_BASE}/me", headers)
 if me is None:
@@ -349,13 +364,13 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             nb_attachments += attachment_count
             print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
 
-    # --- Per-notebook summary ---
-    print(f"\n  ┌─ Summary: {nb_name}")
-    print(f"  │  Sections     : {len(sections)}")
-    print(f"  │  Pages        : {nb_pages}")
-    print(f"  │  Images       : {nb_images}")
-    print(f"  │  Attachments  : {nb_attachments}")
-    print(f"  └─ Errors       : {nb_errors}\n")
+    # --- Per-notebook summary — written to screen and log immediately ---
+    log(f"\n  ┌─ Summary: {nb_name}")
+    log(f"  │  Sections     : {len(sections)}")
+    log(f"  │  Pages        : {nb_pages}")
+    log(f"  │  Images       : {nb_images}")
+    log(f"  │  Attachments  : {nb_attachments}")
+    log(f"  └─ Errors       : {nb_errors}\n")
 
     # Accumulate into grand totals
     total_pages       += nb_pages
@@ -364,13 +379,14 @@ for nb_idx, notebook in enumerate(notebooks, 1):
     total_errors      += nb_errors
 
 # --- Grand total summary ---
-print(f"\n{'=' * 40}")
-print(f"  ARCHIVE COMPLETE")
-print(f"{'=' * 40}")
-print(f"  Notebooks   : {len(notebooks)}")
-print(f"  Pages       : {total_pages}")
-print(f"  Images      : {total_images}")
-print(f"  Attachments : {total_attachments}")
-print(f"  Errors      : {total_errors}")
-print(f"  Output      : {os.path.abspath(root_audit_dir)}")
+log(f"\n{'=' * 40}")
+log(f"  ARCHIVE COMPLETE")
+log(f"{'=' * 40}")
+log(f"  Notebooks   : {len(notebooks)}")
+log(f"  Pages       : {total_pages}")
+log(f"  Images      : {total_images}")
+log(f"  Attachments : {total_attachments}")
+log(f"  Errors      : {total_errors}")
+log(f"  Output      : {os.path.abspath(root_audit_dir)}")
+_log_file.close()
 
