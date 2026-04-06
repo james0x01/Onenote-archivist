@@ -224,6 +224,11 @@ for nb_idx, notebook in enumerate(notebooks, 1):
         print("  [No sections found — skipping]")
         continue
 
+    # Pause between notebooks to let Microsoft's rate limit window reset
+    if nb_idx > 1:
+        print(f"  [Pausing 3 minutes before next notebook to avoid throttling...]")
+        time.sleep(180)
+
     for section in sections:
         section_name = re.sub(r'[\\/*?:"<>|]', "", section['displayName'])
         # _path is the subfolder path if inside section groups, else empty string
@@ -240,6 +245,12 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             page_dir = os.path.join(root_audit_dir, section_path, title)
             media_dir = os.path.join(page_dir, "media")
             os.makedirs(page_dir, exist_ok=True)
+
+            # --- RESUME: skip pages already downloaded ---
+            if os.path.exists(os.path.join(page_dir, "index.html")):
+                print(f"    [Skipped — already archived]: {section_name} > {title}")
+                total_pages += 1
+                continue
 
             # --- Fetch HTML content ---
             content_resp = graph_get(page['contentUrl'], headers)
