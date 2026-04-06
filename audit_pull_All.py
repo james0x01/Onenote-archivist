@@ -2,6 +2,7 @@ import msal
 import requests
 import os
 import re
+import sys
 import json
 import warnings
 import time
@@ -24,14 +25,41 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 # AUTH
 # ---------------------------------------------------------------------------
 
+def is_headless():
+    """
+    Detect if running in a headless environment with no browser available.
+    Checks for SSH sessions and Linux systems without a display server.
+    """
+    if os.environ.get('SSH_CLIENT') or os.environ.get('SSH_TTY'):
+        return True
+    if sys.platform.startswith('linux'):
+        if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
+            return True
+    return False
+
+
 def get_access_token():
     authority = "https://login.microsoftonline.com/consumers"
-    scopes = ["User.Read", "Notes.Read", "Notes.Read.All"]
-    app = msal.PublicClientApplication(CLIENT_ID, authority=authority)
+    scopes    = ["User.Read", "Notes.Read", "Notes.Read.All"]
+    app       = msal.PublicClientApplication(CLIENT_ID, authority=authority)
+
     for account in app.get_accounts():
         app.remove_account(account)
-    print("Opening browser for interactive login...")
-    result = app.acquire_token_interactive(scopes=scopes)
+
+    if is_headless():
+        # Device flow — prints a short code the user enters at microsoft.com/devicelogin
+        # Works on any headless server; authenticate from any device with a browser
+        print("Headless environment detected — using device flow authentication.")
+        flow = app.initiate_device_flow(scopes=scopes)
+        if "user_code" not in flow:
+            print(f"Error initiating device flow: {flow}")
+            return None
+        print(f"\n{flow['message']}\n")   # prints the code and URL
+        result = app.acquire_token_by_device_flow(flow)
+    else:
+        print("Opening browser for interactive login...")
+        result = app.acquire_token_interactive(scopes=scopes)
+
     if "access_token" not in result:
         print(f"Auth failed: {result.get('error_description')}")
         return None
