@@ -249,8 +249,10 @@ print("Fetching all notebooks...")
 notebooks = get_all_pages(f"{GRAPH_BASE}/me/onenote/notebooks", headers)
 print(f"Found {len(notebooks)} notebook(s).\n")
 
-total_pages = 0
-total_errors = 0
+total_pages       = 0
+total_images      = 0
+total_attachments = 0
+total_errors      = 0
 
 for nb_idx, notebook in enumerate(notebooks, 1):
     nb_name = re.sub(r'[\\/*?:"<>|]', "", notebook['displayName'])
@@ -268,6 +270,12 @@ for nb_idx, notebook in enumerate(notebooks, 1):
     if nb_idx > 1:
         print(f"  [Pausing 3 minutes before next notebook to avoid throttling...]")
         time.sleep(180)
+
+    # Per-notebook counters
+    nb_pages       = 0
+    nb_images      = 0
+    nb_attachments = 0
+    nb_errors      = 0
 
     for section in sections:
         section_name = re.sub(r'[\\/*?:"<>|]', "", section['displayName'])
@@ -289,14 +297,14 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             # --- RESUME: skip pages already downloaded ---
             if os.path.exists(os.path.join(page_dir, "index.html")):
                 print(f"    [Skipped — already archived]: {section_name} > {title}")
-                total_pages += 1
+                nb_pages += 1
                 continue
 
             # --- Fetch HTML content ---
             content_resp = graph_get(page['contentUrl'], headers)
             if content_resp is None:
                 print(f"    [FAILED] {nb_name} > {section_name} > {title}")
-                total_errors += 1
+                nb_errors += 1
                 continue
 
             soup = BeautifulSoup(content_resp.text, 'html.parser')
@@ -308,11 +316,33 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             with open(os.path.join(page_dir, "index.html"), "w", encoding='utf-8') as f:
                 f.write(str(soup))
 
-            total_pages += 1
+            nb_pages       += 1
+            nb_images      += media_count
+            nb_attachments += attachment_count
             print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
 
-print(f"\n--- ARCHIVE COMPLETE ---")
-print(f"  Pages archived : {total_pages}")
-print(f"  Errors         : {total_errors}")
-print(f"  Output folder  : {os.path.abspath(root_audit_dir)}")
+    # --- Per-notebook summary ---
+    print(f"\n  ┌─ Summary: {nb_name}")
+    print(f"  │  Sections     : {len(sections)}")
+    print(f"  │  Pages        : {nb_pages}")
+    print(f"  │  Images       : {nb_images}")
+    print(f"  │  Attachments  : {nb_attachments}")
+    print(f"  └─ Errors       : {nb_errors}\n")
+
+    # Accumulate into grand totals
+    total_pages       += nb_pages
+    total_images      += nb_images
+    total_attachments += nb_attachments
+    total_errors      += nb_errors
+
+# --- Grand total summary ---
+print(f"\n{'=' * 40}")
+print(f"  ARCHIVE COMPLETE")
+print(f"{'=' * 40}")
+print(f"  Notebooks   : {len(notebooks)}")
+print(f"  Pages       : {total_pages}")
+print(f"  Images      : {total_images}")
+print(f"  Attachments : {total_attachments}")
+print(f"  Errors      : {total_errors}")
+print(f"  Output      : {os.path.abspath(root_audit_dir)}")
 
