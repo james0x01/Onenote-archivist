@@ -317,6 +317,36 @@ print("Fetching all notebooks...")
 notebooks = get_all_pages(f"{GRAPH_BASE}/me/onenote/notebooks", headers)
 print(f"Found {len(notebooks)} notebook(s).\n")
 
+# --- Notebook selection ---
+print("Available notebooks:")
+for i, nb in enumerate(notebooks, 1):
+    print(f"  {i:>2}. {nb['displayName']}")
+
+print()
+print("  s <numbers> — skip these notebooks       e.g. s 1 3 5")
+print("  p <numbers> — pull only these notebooks  e.g. p 2 4")
+print("  Enter       — process all notebooks")
+print()
+
+selection = input("Your choice: ").strip().lower()
+
+if selection.startswith("s "):
+    skip_nums = set(int(x) for x in selection[2:].split() if x.isdigit())
+    notebooks = [nb for i, nb in enumerate(notebooks, 1) if i not in skip_nums]
+    print(f"\nSkipping {len(skip_nums)} notebook(s). Processing {len(notebooks)}.\n")
+elif selection.startswith("p "):
+    pull_nums = set(int(x) for x in selection[2:].split() if x.isdigit())
+    notebooks = [nb for i, nb in enumerate(notebooks, 1) if i in pull_nums]
+    print(f"\nPulling {len(notebooks)} notebook(s).\n")
+else:
+    print(f"\nProcessing all {len(notebooks)} notebooks.\n")
+
+# Log the final selection
+log(f"Notebooks selected for this run:")
+for nb in notebooks:
+    log(f"  - {nb['displayName']}")
+log()
+
 total_pages       = 0
 total_images      = 0
 total_attachments = 0
