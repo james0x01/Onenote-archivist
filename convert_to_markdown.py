@@ -1,10 +1,12 @@
 import os
 import re
 import csv
+import sys
 import requests
 import PIL.Image
 import google.generativeai as genai
 from pathlib import Path
+from datetime import datetime
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 from dotenv import load_dotenv
@@ -272,20 +274,34 @@ print(f"  Model  : {VISION_MODEL} (Gemini)")
 print(f"  Images : {'Describe via Gemini' if DESCRIBE_IMAGES else 'Reference only (fast mode)'}")
 print()
 
+# --- Log file setup ---
+os.makedirs("onenote_audit", exist_ok=True)
+log_path  = os.path.join(
+    "onenote_audit",
+    f"02_Markdown-log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+)
+_log_file = open(log_path, "w", encoding="utf-8", buffering=1)
+print(f"Logging to: {log_path}\n")
+
+def log(msg=""):
+    """Print to screen and write to log file immediately."""
+    print(msg)
+    _log_file.write(msg + "\n")
+
 # --- Initialise Gemini ---
 if DESCRIBE_IMAGES:
     if not GEMINI_API_KEY:
-        print("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
+        log("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
         DESCRIBE_IMAGES = False
     else:
         try:
             genai.configure(api_key=GEMINI_API_KEY)
             # Quick test call to confirm the key and model are valid
             genai.GenerativeModel(VISION_MODEL).generate_content("hello")
-            print(f"  Gemini ready. Model: {VISION_MODEL}\n")
+            log(f"  Gemini ready. Model: {VISION_MODEL}\n")
         except Exception as e:
-            print(f"  WARNING: Gemini initialisation failed: {e}")
-            print(f"  Disabling image descriptions.\n")
+            log(f"  WARNING: Gemini initialisation failed: {e}")
+            log(f"  Disabling image descriptions.\n")
             DESCRIBE_IMAGES = False
 
 # --- Walk and convert ---
@@ -294,7 +310,7 @@ total_skipped   = 0
 total_errors    = 0
 
 all_pages = sorted(RAW_DIR.rglob("index.html"))
-print(f"Found {len(all_pages)} pages to process.\n")
+log(f"Found {len(all_pages)} pages to process.\n")
 
 for html_file in all_pages:
     page_dir = html_file.parent
@@ -320,23 +336,24 @@ for html_file in all_pages:
 
     # --- Resume: skip already-converted pages ---
     if md_file.exists():
-        print(f"  [Skip] {notebook} > {section} > {page_title}")
+        log(f"  [Skip] {notebook} > {section} > {page_title}")
         total_skipped += 1
         continue
 
-    print(f"  Converting: {notebook} > {section} > {page_title}")
+    log(f"  Converting: {notebook} > {section} > {page_title}")
 
     try:
         convert_page(html_file, page_dir, md_file, metadata)
         total_converted += 1
     except Exception as e:
-        print(f"    [ERROR]: {e}")
+        log(f"    [ERROR]: {e}")
         total_errors += 1
 
-print(f"\n{'=' * 60}")
-print(f"  CONVERSION COMPLETE")
-print(f"{'=' * 60}")
-print(f"  Converted : {total_converted}")
-print(f"  Skipped   : {total_skipped}  (already done)")
-print(f"  Errors    : {total_errors}")
-print(f"  Output    : {MD_DIR.resolve()}")
+log(f"\n{'=' * 60}")
+log(f"  CONVERSION COMPLETE")
+log(f"{'=' * 60}")
+log(f"  Converted : {total_converted}")
+log(f"  Skipped   : {total_skipped}  (already done)")
+log(f"  Errors    : {total_errors}")
+log(f"  Output    : {MD_DIR.resolve()}")
+_log_file.close()
