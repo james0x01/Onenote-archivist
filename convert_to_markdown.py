@@ -310,6 +310,44 @@ total_skipped   = 0
 total_errors    = 0
 
 all_pages = sorted(RAW_DIR.rglob("index.html"))
+
+# --- Notebook selection ---
+# Derive notebook names from top-level folders in 01_Raw_Audit
+notebooks = sorted([d.name for d in RAW_DIR.iterdir() if d.is_dir()])
+print("Available notebooks:")
+for i, nb in enumerate(notebooks, 1):
+    print(f"  {i:>2}. {nb}")
+
+print()
+print("  a           — convert all notebooks")
+print("  s <numbers> — skip these notebooks       e.g. s 1 3 5")
+print("  p <numbers> — pull only these notebooks  e.g. p 2 4")
+print()
+
+selection = input("Your choice: ").strip().lower()
+
+if selection == "a" or selection == "":
+    print(f"\nConverting all {len(notebooks)} notebooks.\n")
+elif selection.startswith("s "):
+    skip_nums = set(int(x) for x in selection[2:].split() if x.isdigit())
+    skip_names = {notebooks[i-1] for i in skip_nums if 1 <= i <= len(notebooks)}
+    all_pages = [p for p in all_pages if p.relative_to(RAW_DIR).parts[0] not in skip_names]
+    print(f"\nSkipping {len(skip_nums)} notebook(s). Processing remaining pages.\n")
+elif selection.startswith("p "):
+    pull_nums = set(int(x) for x in selection[2:].split() if x.isdigit())
+    pull_names = {notebooks[i-1] for i in pull_nums if 1 <= i <= len(notebooks)}
+    all_pages = [p for p in all_pages if p.relative_to(RAW_DIR).parts[0] in pull_names]
+    print(f"\nConverting {len(pull_nums)} notebook(s).\n")
+else:
+    print(f"\nUnrecognised input — converting all notebooks.\n")
+
+# Log the selection
+log(f"Notebooks selected for this run:")
+selected_notebooks = sorted(set(p.relative_to(RAW_DIR).parts[0] for p in all_pages))
+for nb in selected_notebooks:
+    log(f"  - {nb}")
+log()
+
 log(f"Found {len(all_pages)} pages to process.\n")
 
 for html_file in all_pages:
