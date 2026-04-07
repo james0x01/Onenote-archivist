@@ -105,6 +105,9 @@ def describe_image(image_path):
                 else:
                     safe_log(f"      [Image description error]: {e}")
                     return None
+    except Exception as e:
+        safe_log(f"      [Image description error]: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
