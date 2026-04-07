@@ -20,7 +20,7 @@ openpyxl               # Extracts text from Excel files (.xlsx)
 
 # --- Image Descriptions ---
 Pillow                 # Image file handling
-google-generativeai    # Gemini API for image descriptions
+google-genai           # Gemini API for image descriptions (new SDK, replaces google-generativeai)
 
 # --- Environment / Secrets ---
 python-dotenv          # Loads CLIENT_ID and GEMINI_API_KEY from .env file

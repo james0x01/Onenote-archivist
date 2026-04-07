@@ -4,8 +4,9 @@ import csv
 import sys
 import requests
 import PIL.Image
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from google import genai
+from google.genai import types
+import io
 from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -23,7 +24,8 @@ import openpyxl
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 VISION_MODEL    = "gemini-2.0-flash"
-DESCRIBE_IMAGES = True   # Set to False for a fast run without image descriptions
+DESCRIBE_IMAGES  = True   # Set to False for a fast run without image descriptions
+_gemini_client   = None   # initialised below once log file is open
 
 RAW_DIR = Path("onenote_audit/01_Raw_Audit")
 MD_DIR  = Path("onenote_audit/02_Markdown")
@@ -49,25 +51,35 @@ def describe_image(image_path):
     """Send a local image to Gemini and return a plain-text description."""
     # Disable safety filters that can false-positive on technical diagrams,
     # network maps, security content, and screenshots of CLI/code output
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT:        HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH:       HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
+    safety_settings = [
+        types.SafetySetting(category='HARM_CATEGORY_HARASSMENT',        threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH',        threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT',  threshold='BLOCK_NONE'),
+        types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT',  threshold='BLOCK_NONE'),
+    ]
     try:
-        img = PIL.Image.open(image_path)
-        response = genai.GenerativeModel(VISION_MODEL).generate_content(
-            [
+        img  = PIL.Image.open(image_path)
+        fmt  = img.format or 'PNG'
+        buf  = io.BytesIO()
+        img.save(buf, format=fmt)
+        mime_map  = {
+            'JPEG': 'image/jpeg', 'PNG': 'image/png', 'GIF': 'image/gif',
+            'TIFF': 'image/tiff', 'WEBP': 'image/webp',
+        }
+        mime_type = mime_map.get(fmt, 'image/png')
+
+        response = _gemini_client.models.generate_content(
+            model=VISION_MODEL,
+            contents=[
+                types.Part.from_bytes(data=buf.getvalue(), mime_type=mime_type),
                 (
                     "Describe this image in detail for use in a technical document. "
                     "If it contains text, transcribe it exactly. "
                     "If it shows a diagram, chart, network map, or technical drawing, "
                     "explain precisely what it depicts. Be thorough."
                 ),
-                img,
             ],
-            safety_settings=safety_settings,
+            config=types.GenerateContentConfig(safety_settings=safety_settings),
         )
         return response.text.strip()
     except Exception as e:
@@ -319,7 +331,7 @@ if DESCRIBE_IMAGES:
         log("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
         DESCRIBE_IMAGES = False
     else:
-        genai.configure(api_key=GEMINI_API_KEY)
+        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         log(f"  Gemini ready. Model: {VISION_MODEL}\n")
 
 # --- Walk and convert ---
