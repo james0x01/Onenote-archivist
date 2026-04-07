@@ -58,15 +58,21 @@ def describe_image(image_path):
         types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT',  threshold='BLOCK_NONE'),
     ]
     try:
-        img  = PIL.Image.open(image_path)
-        fmt  = img.format or 'PNG'
-        buf  = io.BytesIO()
-        img.save(buf, format=fmt)
-        mime_map  = {
-            'JPEG': 'image/jpeg', 'PNG': 'image/png', 'GIF': 'image/gif',
-            'TIFF': 'image/tiff', 'WEBP': 'image/webp',
-        }
-        mime_type = mime_map.get(fmt, 'image/png')
+        img = PIL.Image.open(image_path)
+        fmt = img.format or 'PNG'
+        buf = io.BytesIO()
+
+        # Gemini does not support TIFF — convert to PNG in memory
+        if fmt == 'TIFF':
+            img.convert('RGB').save(buf, format='PNG')
+            mime_type = 'image/png'
+        else:
+            img.save(buf, format=fmt)
+            mime_map  = {
+                'JPEG': 'image/jpeg', 'PNG': 'image/png',
+                'GIF':  'image/gif',  'WEBP': 'image/webp',
+            }
+            mime_type = mime_map.get(fmt, 'image/png')
 
         response = _gemini_client.models.generate_content(
             model=VISION_MODEL,
