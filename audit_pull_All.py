@@ -236,7 +236,8 @@ def download_media(soup, media_dir, headers):
         content_type = resp.headers.get('Content-Type', 'image/png')
         ext_map = {
             'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif',
-            'image/svg+xml': 'svg', 'image/webp': 'webp'
+            'image/svg+xml': 'svg', 'image/webp': 'webp', 'image/tiff': 'tiff',
+            'application/octet-stream': 'jpg'  # OneNote sometimes serves JPEGs with this type
         }
         ext = ext_map.get(content_type.split(';')[0].strip(), 'bin')
         filename = f"resource_{i}.{ext}"
