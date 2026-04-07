@@ -295,7 +295,7 @@ os.makedirs(root_audit_dir, exist_ok=True)
 # Named with timestamp so each run gets its own file — never overwritten
 log_path = os.path.join(
     "onenote_audit",
-    f"archive_log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+    f"01_Raw-log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
 )
 _log_file = open(log_path, "w", encoding="utf-8", buffering=1)  # buffering=1 = line-buffered (writes instantly)
 print(f"Logging to: {log_path}\n")
