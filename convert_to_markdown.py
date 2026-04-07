@@ -21,11 +21,24 @@ import openpyxl
 
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-VISION_MODEL    = "gemini-1.5-flash"
+VISION_MODEL    = "gemini-2.0-flash"
 DESCRIBE_IMAGES = True   # Set to False for a fast run without image descriptions
 
 RAW_DIR = Path("onenote_audit/01_Raw_Audit")
 MD_DIR  = Path("onenote_audit/02_Markdown")
+
+# ---------------------------------------------------------------------------
+# LOGGING HELPER
+# ---------------------------------------------------------------------------
+
+def safe_log(msg):
+    """Log to screen and file if the log file is open, otherwise just print."""
+    print(msg)
+    try:
+        _log_file.write(msg + "\n")
+    except Exception:
+        pass  # log file may not be open yet during early startup
+
 
 # ---------------------------------------------------------------------------
 # GEMINI VISION
@@ -46,7 +59,7 @@ def describe_image(image_path):
         ])
         return response.text.strip()
     except Exception as e:
-        print(f"      [Image description error]: {e}")
+        safe_log(f"      [Image description error]: {e}")
         return None
 
 
@@ -119,7 +132,7 @@ def extract_attachment_text(file_path):
             return None  # unsupported type — will fall back to reference only
 
     except Exception as e:
-        print(f"      [Extraction error for {Path(file_path).name}]: {e}")
+        safe_log(f"      [Extraction error for {Path(file_path).name}]: {e}")
         return None
 
 
@@ -190,7 +203,7 @@ class OneNoteConverter(MarkdownConverter):
         if attach_path and attach_path.exists():
             content = extract_attachment_text(attach_path)
             if content:
-                print(f"      Extracting: {filename}")
+                safe_log(f"      Extracting: {filename}")
                 return f"{header}\n{content}\n\n---\n"
             else:
                 # File type not supported for extraction — reference only
@@ -211,7 +224,7 @@ class OneNoteConverter(MarkdownConverter):
         img_ref  = f"\n![{alt}]({abs_path})\n"
 
         if DESCRIBE_IMAGES and abs_path.exists():
-            print(f"      Describing: {src} ...")
+            safe_log(f"      Describing: {src} ...")
             description = describe_image(abs_path)
             if description:
                 quoted = "\n".join(f"> {line}" for line in description.splitlines())
