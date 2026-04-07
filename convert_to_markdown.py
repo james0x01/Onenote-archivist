@@ -7,6 +7,7 @@ import PIL.Image
 from google import genai
 from google.genai import types
 import io
+import time
 from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -74,23 +75,36 @@ def describe_image(image_path):
             }
             mime_type = mime_map.get(fmt, 'image/png')
 
-        response = _gemini_client.models.generate_content(
-            model=VISION_MODEL,
-            contents=[
-                types.Part.from_bytes(data=buf.getvalue(), mime_type=mime_type),
-                (
-                    "Describe this image in detail for use in a technical document. "
-                    "If it contains text, transcribe it exactly. "
-                    "If it shows a diagram, chart, network map, or technical drawing, "
-                    "explain precisely what it depicts. Be thorough."
-                ),
-            ],
-            config=types.GenerateContentConfig(safety_settings=safety_settings),
-        )
-        return response.text.strip()
-    except Exception as e:
-        safe_log(f"      [Image description error]: {e}")
-        return None
+        contents = [
+            types.Part.from_bytes(data=buf.getvalue(), mime_type=mime_type),
+            (
+                "Describe this image in detail for use in a technical document. "
+                "If it contains text, transcribe it exactly. "
+                "If it shows a diagram, chart, network map, or technical drawing, "
+                "explain precisely what it depicts. Be thorough."
+            ),
+        ]
+        config = types.GenerateContentConfig(safety_settings=safety_settings)
+
+        # Retry up to 3 times on transient errors (503 unavailable, 429 rate limit)
+        max_retries = 3
+        wait        = 10  # seconds — doubles each retry
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = _gemini_client.models.generate_content(
+                    model=VISION_MODEL, contents=contents, config=config,
+                )
+                return response.text.strip()
+            except Exception as e:
+                err = str(e)
+                transient = any(code in err for code in ("503", "429", "UNAVAILABLE"))
+                if transient and attempt < max_retries:
+                    safe_log(f"      [Retry {attempt}/{max_retries} in {wait}s]: {err[:80]}")
+                    time.sleep(wait)
+                    wait *= 2   # exponential backoff: 10s → 20s → 40s
+                else:
+                    safe_log(f"      [Image description error]: {e}")
+                    return None
 
 
 # ---------------------------------------------------------------------------
