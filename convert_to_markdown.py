@@ -23,7 +23,7 @@ import openpyxl
 
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-VISION_MODEL    = "gemini-2.0-flash"
+VISION_MODEL    = "gemini-2.5-flash"
 DESCRIBE_IMAGES  = True   # Set to False for a fast run without image descriptions
 _gemini_client   = None   # initialised below once log file is open
 
