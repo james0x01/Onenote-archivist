@@ -16,6 +16,7 @@ TODO: Phase 2 — summarize_rollups.py will read these page summaries and
 import os
 import re
 import sys
+import time
 import argparse
 import requests
 from pathlib import Path
@@ -83,6 +84,22 @@ def safe_log(msg):
         _log_file.write(msg + "\n")
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# TELEMETRY HELPER
+# ---------------------------------------------------------------------------
+
+def format_eta(seconds):
+    """Format a duration in seconds as a human-readable string."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    else:
+        hours   = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +316,9 @@ log(f"Found {len(all_pages)} pages to process.\n")
 total_summarised = 0
 total_skipped    = 0
 total_errors     = 0
+processing_times = []   # seconds per page (summarised pages only)
+page_sizes       = []   # chars per page
+script_start     = time.time()
 
 for md_file in all_pages:
     rel_path   = md_file.relative_to(MD_DIR)
@@ -326,7 +346,10 @@ for md_file in all_pages:
             total_skipped += 1
             continue
 
+        page_size = len(body)
+        page_start = time.time()
         summary, llm_tags = summarise_page(body, section, page_title)
+        elapsed   = time.time() - page_start
 
         if summary is None:
             total_errors += 1
@@ -370,9 +393,20 @@ for md_file in all_pages:
         sum_file.write_text(output, encoding="utf-8")
         total_summarised += 1
 
+        # --- Telemetry ---
+        processing_times.append(elapsed)
+        page_sizes.append(page_size)
+        avg_time  = sum(processing_times) / len(processing_times)
+        done      = total_summarised + total_skipped + total_errors
+        remaining = len(all_pages) - done
+        eta       = format_eta(avg_time * remaining) if remaining > 0 else "done"
+        log(f"    [{elapsed:.1f}s | {page_size:,} chars | avg {avg_time:.1f}s/page | ETA {eta}]")
+
     except Exception as e:
         log(f"    [ERROR]: {e}")
         total_errors += 1
+
+total_elapsed = time.time() - script_start
 
 log(f"\n{'=' * 60}")
 log(f"  SUMMARISATION COMPLETE")
@@ -380,5 +414,10 @@ log(f"{'=' * 60}")
 log(f"  Summarised : {total_summarised}")
 log(f"  Skipped    : {total_skipped}  (already done or empty)")
 log(f"  Errors     : {total_errors}")
+log(f"  Total time : {format_eta(total_elapsed)}")
+if processing_times:
+    log(f"  Avg/page   : {format_eta(sum(processing_times) / len(processing_times))}")
+    log(f"  Fastest    : {format_eta(min(processing_times))}  ({min(page_sizes):,} chars)")
+    log(f"  Slowest    : {format_eta(max(processing_times))}  ({max(page_sizes):,} chars)")
 log(f"  Output     : {SUM_DIR.resolve()}")
 _log_file.close()
