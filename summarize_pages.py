@@ -314,6 +314,7 @@ log(f"Found {len(all_pages)} pages to process.\n")
 
 # --- Walk and summarise ---
 total_summarised = 0
+total_updated    = 0
 total_skipped    = 0
 total_errors     = 0
 processing_times = []   # seconds per page (summarised pages only)
@@ -329,22 +330,47 @@ for md_file in all_pages:
 
     sum_file = SUM_DIR / rel_path
 
-    # --- Resume / force ---
-    if sum_file.exists() and not force:
-        log(f"  [Skip] {notebook} > {section} > {page_title}")
-        total_skipped += 1
-        continue
-
-    log(f"  Summarising: {notebook} > {section} > {page_title}")
-
+    # Read source file first — needed for timestamp check and summarisation
     try:
         text       = md_file.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
+    except Exception as e:
+        log(f"    [ERROR reading source]: {e}")
+        total_errors += 1
+        continue
 
-        if not body.strip():
-            log(f"    [Skip] Empty page")
+    if not body.strip():
+        log(f"  [Skip] Empty page: {notebook} > {section} > {page_title}")
+        total_skipped += 1
+        continue
+
+    source_ts = meta.get("lastModifiedDateTime", "")
+
+    # --- Resume / force ---
+    is_update = False
+    if sum_file.exists() and not force:
+        if source_ts:
+            try:
+                existing_meta, _ = parse_frontmatter(sum_file.read_text(encoding="utf-8"))
+                if existing_meta.get("lastModifiedDateTime", "") == source_ts:
+                    log(f"  [Skip] {notebook} > {section} > {page_title}")
+                    total_skipped += 1
+                    continue
+                # Timestamp changed — re-summarise
+                is_update = True
+                log(f"  [Update] {notebook} > {section} > {page_title}")
+            except Exception:
+                log(f"  [Update] {notebook} > {section} > {page_title}")
+                is_update = True
+        else:
+            # No timestamp in source — fall back to old behaviour
+            log(f"  [Skip] {notebook} > {section} > {page_title}")
             total_skipped += 1
             continue
+    else:
+        log(f"  Summarising: {notebook} > {section} > {page_title}")
+
+    try:
 
         page_size = len(body)
         page_start = time.time()
@@ -377,7 +403,7 @@ for md_file in all_pages:
 
         # --- YAML frontmatter ---
         fm_lines = ["---"]
-        for key in ("notebook", "section", "title", "created"):
+        for key in ("notebook", "section", "title", "created", "lastModifiedDateTime"):
             val = meta.get(key, "")
             if val:
                 fm_lines.append(f'{key}: "{val}"')
@@ -391,13 +417,16 @@ for md_file in all_pages:
         output = f"{frontmatter}# Summary: {page_title}\n\n{summary}{attach_section}\n"
         os.makedirs(str(sum_file.parent), exist_ok=True)
         sum_file.write_text(output, encoding="utf-8")
-        total_summarised += 1
+        if is_update:
+            total_updated += 1
+        else:
+            total_summarised += 1
 
         # --- Telemetry ---
         processing_times.append(elapsed)
         page_sizes.append(page_size)
         avg_time  = sum(processing_times) / len(processing_times)
-        done      = total_summarised + total_skipped + total_errors
+        done      = total_summarised + total_updated + total_skipped + total_errors
         remaining = len(all_pages) - done
         eta       = format_eta(avg_time * remaining) if remaining > 0 else "done"
         log(f"    [{elapsed:.1f}s | {page_size:,} chars | avg {avg_time:.1f}s/page | ETA {eta}]")
@@ -412,7 +441,8 @@ log(f"\n{'=' * 60}")
 log(f"  SUMMARISATION COMPLETE")
 log(f"{'=' * 60}")
 log(f"  Summarised : {total_summarised}")
-log(f"  Skipped    : {total_skipped}  (already done or empty)")
+log(f"  Updated    : {total_updated}")
+log(f"  Skipped    : {total_skipped}  (unchanged or empty)")
 log(f"  Errors     : {total_errors}")
 log(f"  Total time : {format_eta(total_elapsed)}")
 if processing_times:

@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import sys
+import json
 import requests
 import PIL.Image
 from google import genai
@@ -42,6 +43,55 @@ def safe_log(msg):
         _log_file.write(msg + "\n")
     except Exception:
         pass  # log file may not be open yet during early startup
+
+
+# ---------------------------------------------------------------------------
+# MANIFEST HELPERS
+# ---------------------------------------------------------------------------
+
+_manifest_cache = {}
+
+def _load_manifest(notebook_raw_dir):
+    """Load and cache manifest.json for a notebook in 01_Raw_Audit."""
+    key = str(notebook_raw_dir)
+    if key not in _manifest_cache:
+        path = Path(notebook_raw_dir) / "manifest.json"
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    _manifest_cache[key] = json.load(f)
+            except Exception:
+                _manifest_cache[key] = {"pages": {}}
+        else:
+            _manifest_cache[key] = {"pages": {}}
+    return _manifest_cache[key]
+
+
+def get_page_timestamp(html_file):
+    """Return lastModifiedDateTime for a page from its notebook manifest."""
+    rel   = html_file.parent.relative_to(RAW_DIR)
+    parts = rel.parts
+    if len(parts) < 2:
+        return None
+    manifest = _load_manifest(RAW_DIR / parts[0])
+    page_key = "/".join(parts[1:])
+    entry    = manifest.get("pages", {}).get(page_key)
+    return entry.get("lastModifiedDateTime") if entry else None
+
+
+def read_md_timestamp(md_file):
+    """Read lastModifiedDateTime from an existing .md file's frontmatter."""
+    try:
+        text = md_file.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            end = text.find("---", 3)
+            if end != -1:
+                for line in text[3:end].splitlines():
+                    if line.strip().startswith("lastModifiedDateTime:"):
+                        return line.split(":", 1)[1].strip().strip('"')
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +409,7 @@ if DESCRIBE_IMAGES:
 
 # --- Walk and convert ---
 total_converted = 0
+total_updated   = 0
 total_skipped   = 0
 total_errors    = 0
 
@@ -414,28 +465,45 @@ for html_file in all_pages:
     page_title = parts[-1] if len(parts) >= 1 else "Unknown"
     section    = " / ".join(parts[1:-1]) if len(parts) >= 3 else parts[1] if len(parts) == 2 else ""
 
+    manifest_ts = get_page_timestamp(html_file)
+
     metadata = {
-        "notebook" : notebook,
-        "section"  : section,
-        "title"    : page_title,
-        "created"  : "",         # filled in by convert_page if available
-        "source"   : str(html_file.resolve()),
+        "notebook"             : notebook,
+        "section"              : section,
+        "title"                : page_title,
+        "created"              : "",   # filled in by convert_page if available
+        "lastModifiedDateTime" : manifest_ts or "",
+        "source"               : str(html_file.resolve()),
     }
 
     # Output: 02_Markdown/Notebook/Section/PageTitle.md  (flat .md, no subfolder)
     md_file = MD_DIR / rel_path.parent / f"{page_title}.md"
 
-    # --- Resume: skip already-converted pages ---
+    # --- Resume: skip unless page has been updated since last conversion ---
+    is_update = False
     if md_file.exists():
-        log(f"  [Skip] {notebook} > {section} > {page_title}")
-        total_skipped += 1
-        continue
-
-    log(f"  Converting: {notebook} > {section} > {page_title}")
+        if manifest_ts and read_md_timestamp(md_file) == manifest_ts:
+            log(f"  [Skip] {notebook} > {section} > {page_title}")
+            total_skipped += 1
+            continue
+        elif manifest_ts:
+            # Timestamp changed — re-convert
+            is_update = True
+            log(f"  [Update] {notebook} > {section} > {page_title}")
+        else:
+            # No manifest — fall back to old behaviour (skip if file exists)
+            log(f"  [Skip] {notebook} > {section} > {page_title}")
+            total_skipped += 1
+            continue
+    else:
+        log(f"  Converting: {notebook} > {section} > {page_title}")
 
     try:
         convert_page(html_file, page_dir, md_file, metadata)
-        total_converted += 1
+        if is_update:
+            total_updated += 1
+        else:
+            total_converted += 1
     except Exception as e:
         log(f"    [ERROR]: {e}")
         total_errors += 1
@@ -444,7 +512,8 @@ log(f"\n{'=' * 60}")
 log(f"  CONVERSION COMPLETE")
 log(f"{'=' * 60}")
 log(f"  Converted : {total_converted}")
-log(f"  Skipped   : {total_skipped}  (already done)")
+log(f"  Updated   : {total_updated}")
+log(f"  Skipped   : {total_skipped}  (unchanged)")
 log(f"  Errors    : {total_errors}")
 log(f"  Output    : {MD_DIR.resolve()}")
 _log_file.close()
