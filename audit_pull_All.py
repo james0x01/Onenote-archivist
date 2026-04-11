@@ -87,6 +87,29 @@ def safe_log(msg):
         pass  # log file may not be open yet during early auth calls
 
 
+# ---------------------------------------------------------------------------
+# MANIFEST HELPERS
+# ---------------------------------------------------------------------------
+
+def load_manifest(notebook_dir):
+    """Load manifest.json for a notebook, or return an empty one if not found."""
+    path = os.path.join(notebook_dir, "manifest.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"pages": {}}
+
+
+def save_manifest(notebook_dir, manifest):
+    """Write manifest.json for a notebook."""
+    path = os.path.join(notebook_dir, "manifest.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+
 def graph_get(url, headers, retries=6):
     """GET a Graph URL with a courtesy delay + exponential backoff on errors."""
     global _request_counter, _consecutive_429s
@@ -351,6 +374,9 @@ for nb in notebooks:
 log()
 
 total_pages       = 0
+total_new         = 0
+total_updated     = 0
+total_skipped     = 0
 total_images      = 0
 total_attachments = 0
 total_errors      = 0
@@ -372,8 +398,15 @@ for nb_idx, notebook in enumerate(notebooks, 1):
         print(f"  [Pausing 3 minutes before next notebook to avoid throttling...]")
         time.sleep(180)
 
+    # Load manifest for change detection
+    nb_dir   = os.path.join(root_audit_dir, nb_name)
+    os.makedirs(nb_dir, exist_ok=True)
+    manifest = load_manifest(nb_dir)
+
     # Per-notebook counters
-    nb_pages       = 0
+    nb_new         = 0   # pages pulled for the first time
+    nb_updated     = 0   # pages re-pulled because content changed
+    nb_skipped     = 0   # pages unchanged since last run
     nb_images      = 0
     nb_attachments = 0
     nb_errors      = 0
@@ -385,7 +418,8 @@ for nb_idx, notebook in enumerate(notebooks, 1):
 
         # --- Fetch ALL pages in this section (paginated) ---
         pages = get_all_pages(
-            f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages",
+            f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages"
+            f"?$select=id,title,contentUrl,lastModifiedDateTime",
             headers
         )
 
@@ -395,10 +429,29 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             media_dir = os.path.join(page_dir, "media")
             os.makedirs(page_dir, exist_ok=True)
 
-            # --- RESUME: skip pages already downloaded ---
-            if os.path.exists(os.path.join(page_dir, "index.html")):
-                print(f"    [Skipped — already archived]: {section_name} > {title}")
-                nb_pages += 1
+            # --- Change detection via manifest ---
+            last_modified = page.get('lastModifiedDateTime', '')
+            page_key      = "/".join(filter(None, [
+                section['_path'].replace("\\", "/"), section_name, title
+            ]))
+            html_path  = os.path.join(page_dir, "index.html")
+            entry      = manifest.get("pages", {}).get(page_key)
+            html_exists = os.path.exists(html_path)
+
+            if entry is not None and entry.get("lastModifiedDateTime") == last_modified and html_exists:
+                # Manifest timestamp matches and file exists — nothing to do
+                print(f"    [Skipped — unchanged]: {section_name} > {title}")
+                nb_skipped += 1
+                continue
+            elif entry is None and html_exists:
+                # Backward compat: file exists from a previous run before manifest was added
+                # Backfill the manifest so future runs use timestamp comparison
+                manifest.setdefault("pages", {})[page_key] = {
+                    "lastModifiedDateTime": last_modified,
+                    "pulled": datetime.now().isoformat()
+                }
+                print(f"    [Skipped — existing, manifest backfilled]: {section_name} > {title}")
+                nb_skipped += 1
                 continue
 
             # --- Fetch HTML content ---
@@ -414,24 +467,45 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             media_count, attachment_count = download_media(soup, media_dir, headers)
 
             # --- Save updated HTML ---
-            with open(os.path.join(page_dir, "index.html"), "w", encoding='utf-8') as f:
+            with open(html_path, "w", encoding='utf-8') as f:
                 f.write(str(soup))
 
-            nb_pages       += 1
+            # --- Update manifest ---
+            is_update = entry is not None
+            manifest.setdefault("pages", {})[page_key] = {
+                "lastModifiedDateTime": last_modified,
+                "pulled": datetime.now().isoformat()
+            }
+
             nb_images      += media_count
             nb_attachments += attachment_count
-            print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
+            if is_update:
+                nb_updated += 1
+                print(f"    Updated  [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
+            else:
+                nb_new += 1
+                print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
 
-    # --- Per-notebook summary — written to screen and log immediately ---
+    # --- Save manifest ---
+    save_manifest(nb_dir, manifest)
+
+    # --- Per-notebook summary ---
+    nb_pages = nb_new + nb_updated + nb_skipped
     log(f"\n  ┌─ Summary: {nb_name}")
     log(f"  │  Sections     : {len(sections)}")
     log(f"  │  Pages        : {nb_pages}")
+    log(f"  │  New          : {nb_new}")
+    log(f"  │  Updated      : {nb_updated}")
+    log(f"  │  Unchanged    : {nb_skipped}")
     log(f"  │  Images       : {nb_images}")
     log(f"  │  Attachments  : {nb_attachments}")
     log(f"  └─ Errors       : {nb_errors}\n")
 
     # Accumulate into grand totals
     total_pages       += nb_pages
+    total_new         += nb_new
+    total_updated     += nb_updated
+    total_skipped     += nb_skipped
     total_images      += nb_images
     total_attachments += nb_attachments
     total_errors      += nb_errors
@@ -442,6 +516,9 @@ log(f"  ARCHIVE COMPLETE")
 log(f"{'=' * 40}")
 log(f"  Notebooks   : {len(notebooks)}")
 log(f"  Pages       : {total_pages}")
+log(f"  New         : {total_new}")
+log(f"  Updated     : {total_updated}")
+log(f"  Unchanged   : {total_skipped}")
 log(f"  Images      : {total_images}")
 log(f"  Attachments : {total_attachments}")
 log(f"  Errors      : {total_errors}")
