@@ -158,6 +158,13 @@ def graph_get(url, headers, retries=6):
                 print(f"  Response: {resp.text[:300]}")
                 return None
 
+            elif resp.status_code in (500, 502, 503, 504):
+                _consecutive_429s = 0
+                wait = 15 * (2 ** attempt)
+                print(f"  [HTTP {resp.status_code} — attempt {attempt+1}/{retries}] Retrying in {wait}s")
+                print(f"  Response: {resp.text[:300]}")
+                time.sleep(wait)
+
             else:
                 _consecutive_429s = 0
                 print(f"  [HTTP {resp.status_code}] {url}")
