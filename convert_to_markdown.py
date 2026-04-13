@@ -149,7 +149,7 @@ def describe_image(image_path):
                 err = str(e)
                 transient = any(code in err for code in ("503", "429", "UNAVAILABLE"))
                 if transient and attempt < max_retries:
-                    safe_log(f"      [Retry {attempt}/{max_retries} in {wait}s]: {err[:80]}")
+                    safe_log(f"      [Retry {attempt}/{max_retries} in {wait}s]: {err}")
                     time.sleep(wait)
                     wait *= 2   # exponential backoff: 10s → 20s → 40s
                 else:
