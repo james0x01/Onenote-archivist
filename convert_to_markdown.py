@@ -102,6 +102,21 @@ def read_md_timestamp(md_file):
     return None
 
 
+def has_undescribed_images(md_file):
+    """Return True if the .md file contains any image reference without a description."""
+    try:
+        lines = md_file.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if line.strip().startswith("!["):
+                # Check the next 3 lines for an Image Description block
+                window = lines[i+1 : i+4]
+                if not any("Image Description" in l for l in window):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # VISION — GEMINI
 # ---------------------------------------------------------------------------
@@ -553,13 +568,18 @@ for html_file in all_pages:
     # Output: 02_Markdown/Notebook/Section/PageTitle.md  (flat .md, no subfolder)
     md_file = MD_DIR / rel_path.parent / f"{page_title}.md"
 
-    # --- Resume: skip unless page has been updated since last conversion ---
+    # --- Resume: skip unless page has been updated or has missing image descriptions ---
     is_update = False
     if md_file.exists():
         if manifest_ts and read_md_timestamp(md_file) == manifest_ts:
-            log(f"  [Skip] {notebook} > {section} > {page_title}")
-            total_skipped += 1
-            continue
+            # Timestamp matches — but re-convert if images are missing descriptions
+            if DESCRIBE_IMAGES and has_undescribed_images(md_file):
+                is_update = True
+                log(f"  [Retry images] {notebook} > {section} > {page_title}")
+            else:
+                log(f"  [Skip] {notebook} > {section} > {page_title}")
+                total_skipped += 1
+                continue
         elif manifest_ts:
             # Timestamp changed — re-convert
             is_update = True
