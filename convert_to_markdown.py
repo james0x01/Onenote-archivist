@@ -3,6 +3,7 @@ import re
 import csv
 import sys
 import json
+import base64
 import requests
 import PIL.Image
 from google import genai
@@ -26,8 +27,15 @@ import openpyxl
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 VISION_MODEL    = "gemini-2.5-flash"
-DESCRIBE_IMAGES  = True   # Set to False for a fast run without image descriptions
-_gemini_client   = None   # initialised below once log file is open
+OLLAMA_HOST     = "http://10.254.254.48:11434"
+OLLAMA_VISION_MODELS = {
+    "1": ("llama4:latest",  "llama4     (108B, powerful)"),
+    "2": ("gemma3:12b",     "gemma3:12b  (12B, faster)"),
+}
+DESCRIBE_IMAGES    = True   # Set to False for a fast run without image descriptions
+_gemini_client     = None   # initialised below once log file is open
+_vision_backend    = "gemini"       # "gemini" or "ollama"
+_vision_model_name = VISION_MODEL   # display name written into image descriptions
 
 RAW_DIR = Path("onenote_audit/01_Raw_Audit")
 MD_DIR  = Path("onenote_audit/02_Markdown")
@@ -95,10 +103,10 @@ def read_md_timestamp(md_file):
 
 
 # ---------------------------------------------------------------------------
-# GEMINI VISION
+# VISION — GEMINI
 # ---------------------------------------------------------------------------
 
-def describe_image(image_path):
+def describe_image_gemini(image_path):
     """Send a local image to Gemini and return a plain-text description."""
     # Disable safety filters that can false-positive on technical diagrams,
     # network maps, security content, and screenshots of CLI/code output
@@ -158,6 +166,53 @@ def describe_image(image_path):
     except Exception as e:
         safe_log(f"      [Image description error]: {e}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# VISION — OLLAMA (local)
+# ---------------------------------------------------------------------------
+
+def describe_image_ollama(image_path, model):
+    """Send a local image to an Ollama vision model and return a description."""
+    try:
+        img = PIL.Image.open(image_path)
+        fmt = img.format or 'PNG'
+        buf = io.BytesIO()
+        if fmt in ('TIFF', 'BMP'):
+            img.convert('RGB').save(buf, format='PNG')
+        else:
+            img.save(buf, format=fmt)
+        img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+        payload = {
+            "model":  model,
+            "prompt": (
+                "Describe this image in detail for use in a technical document. "
+                "If it contains text, transcribe it exactly. "
+                "If it shows a diagram, chart, network map, or technical drawing, "
+                "explain precisely what it depicts. Be thorough."
+            ),
+            "images": [img_b64],
+            "stream": False,
+        }
+        resp = requests.post(
+            f"{OLLAMA_HOST}/api/generate",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+
+    except Exception as e:
+        safe_log(f"      [Image description error]: {e}")
+        return None
+
+
+def describe_image(image_path):
+    """Dispatch image description to the selected vision backend."""
+    if _vision_backend == 'ollama':
+        return describe_image_ollama(image_path, _vision_model_name)
+    return describe_image_gemini(image_path)
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +380,7 @@ class OneNoteConverter(MarkdownConverter):
             description = describe_image(abs_path)
             if description:
                 quoted = "\n".join(f"> {line}" for line in description.splitlines())
-                return f"{img_ref}\n> **[Image Description]**\n{quoted}\n\n"
+                return f"{img_ref}\n> **[Image Description — {_vision_model_name}]**\n{quoted}\n\n"
 
         return f"{img_ref}\n"
 
@@ -380,8 +435,7 @@ print("  OneNote HTML → Markdown Converter")
 print("=" * 60)
 print(f"  Source : {RAW_DIR.resolve()}")
 print(f"  Output : {MD_DIR.resolve()}")
-print(f"  Model  : {VISION_MODEL} (Gemini)")
-print(f"  Images : {'Describe via Gemini' if DESCRIBE_IMAGES else 'Reference only (fast mode)'}")
+print(f"  Images : {'Describe via AI vision model' if DESCRIBE_IMAGES else 'Reference only (fast mode)'}")
 print()
 
 # --- Log file setup ---
@@ -398,14 +452,34 @@ def log(msg=""):
     print(msg)
     _log_file.write(msg + "\n")
 
-# --- Initialise Gemini ---
+# --- Vision model selection ---
 if DESCRIBE_IMAGES:
-    if not GEMINI_API_KEY:
-        log("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
+    print("Vision model for image descriptions:")
+    print("  g  — Gemini [gemini-2.5-flash]  (cloud)")
+    for key, (_, label) in OLLAMA_VISION_MODELS.items():
+        print(f"  {key}  — Ollama: {label}  (local)")
+    print("  n  — Skip image descriptions (fast mode)")
+    print()
+    vis_choice = input("Vision choice [g]: ").strip().lower()
+    print()
+
+    if vis_choice in OLLAMA_VISION_MODELS:
+        _vision_model_name, model_label = OLLAMA_VISION_MODELS[vis_choice]
+        _vision_backend = 'ollama'
+        log(f"  Vision: Ollama — {model_label}\n")
+    elif vis_choice == 'n':
         DESCRIBE_IMAGES = False
+        log("  Vision: Disabled (fast mode)\n")
     else:
-        _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        log(f"  Gemini ready. Model: {VISION_MODEL}\n")
+        # Default: Gemini (blank Enter or 'g')
+        _vision_backend    = 'gemini'
+        _vision_model_name = VISION_MODEL
+        if not GEMINI_API_KEY:
+            log("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
+            DESCRIBE_IMAGES = False
+        else:
+            _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+            log(f"  Vision: Gemini — {VISION_MODEL}\n")
 
 # --- Walk and convert ---
 total_converted = 0
