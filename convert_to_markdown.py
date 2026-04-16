@@ -26,8 +26,9 @@ import openpyxl
 
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-VISION_MODEL    = "gemini-2.5-flash"
-OLLAMA_HOST     = "http://10.254.254.48:11434"
+VISION_MODEL       = "gemini-2.5-flash"
+GEMINI_CALL_DELAY  = 4   # seconds between Gemini image calls — reduces 503 overload errors
+OLLAMA_HOST        = "http://10.254.254.48:11434"
 OLLAMA_VISION_MODELS = {
     "1": ("llama4:latest",  "llama4     (108B, powerful)"),
     "2": ("gemma3:12b",     "gemma3:12b  (12B, faster)"),
@@ -123,6 +124,7 @@ def has_undescribed_images(md_file):
 
 def describe_image_gemini(image_path):
     """Send a local image to Gemini and return a plain-text description."""
+    time.sleep(GEMINI_CALL_DELAY)  # pace requests to avoid 503 overload errors
     # Disable safety filters that can false-positive on technical diagrams,
     # network maps, security content, and screenshots of CLI/code output
     safety_settings = [
@@ -161,7 +163,7 @@ def describe_image_gemini(image_path):
 
         # Retry up to 3 times on transient errors (503 unavailable, 429 rate limit)
         max_retries = 3
-        wait        = 10  # seconds — doubles each retry
+        wait        = 20  # seconds — 20s → 40s → 60s
         for attempt in range(1, max_retries + 1):
             try:
                 response = _gemini_client.models.generate_content(
@@ -174,7 +176,7 @@ def describe_image_gemini(image_path):
                 if transient and attempt < max_retries:
                     safe_log(f"      [Retry {attempt}/{max_retries} in {wait}s]: {err}")
                     time.sleep(wait)
-                    wait *= 2   # exponential backoff: 10s → 20s → 40s
+                    wait = min(wait + 20, 60)  # stepped backoff: 20s → 40s → 60s
                 else:
                     safe_log(f"      [Image description error]: {e}")
                     return None
