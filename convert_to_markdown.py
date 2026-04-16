@@ -213,7 +213,7 @@ def describe_image_ollama(image_path, model):
         resp = requests.post(
             f"{OLLAMA_HOST}/api/generate",
             json=payload,
-            timeout=120,
+            timeout=300,  # 5 minutes — local LLMs can be slow on large images
         )
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
