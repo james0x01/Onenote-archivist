@@ -447,7 +447,7 @@ for nb_idx, notebook in enumerate(notebooks, 1):
 
             if entry is not None and entry.get("lastModifiedDateTime") == last_modified and html_exists:
                 # Manifest timestamp matches and file exists — nothing to do
-                print(f"    [Skipped — unchanged]: {section_name} > {title}")
+                log(f"    [Skipped — unchanged]: {section_name} > {title}")
                 nb_skipped += 1
                 continue
             elif entry is None and html_exists:
@@ -457,14 +457,14 @@ for nb_idx, notebook in enumerate(notebooks, 1):
                     "lastModifiedDateTime": last_modified,
                     "pulled": datetime.now().isoformat()
                 }
-                print(f"    [Skipped — existing, manifest backfilled]: {section_name} > {title}")
+                log(f"    [Skipped — existing, manifest backfilled]: {section_name} > {title}")
                 nb_skipped += 1
                 continue
 
             # --- Fetch HTML content ---
             content_resp = graph_get(page['contentUrl'], headers)
             if content_resp is None:
-                print(f"    [FAILED] {nb_name} > {section_name} > {title}")
+                log(f"    [FAILED] {nb_name} > {section_name} > {title}")
                 nb_errors += 1
                 continue
 
@@ -488,10 +488,10 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             nb_attachments += attachment_count
             if is_update:
                 nb_updated += 1
-                print(f"    Updated  [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
+                log(f"    Updated  [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
             else:
                 nb_new += 1
-                print(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
+                log(f"    Archived [{media_count} media, {attachment_count} attachments]: {section_name} > {title}")
 
     # --- Save manifest ---
     save_manifest(nb_dir, manifest)
