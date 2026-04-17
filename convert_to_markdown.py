@@ -109,15 +109,28 @@ def read_md_timestamp(md_file):
 
 
 def has_undescribed_images(md_file):
-    """Return True if the .md file contains any image reference without a description."""
+    """Return True if the .md file contains any image reference without a description.
+
+    Handles multi-line alt text: scans forward from the opening ![ to find the
+    closing ](...) line, then checks the lines immediately after that for a
+    description block.
+    """
     try:
         lines = md_file.read_text(encoding="utf-8").splitlines()
-        for i, line in enumerate(lines):
-            if line.strip().startswith("!["):
-                # Check the next 3 lines for an Image Description block
-                window = lines[i+1 : i+4]
+        i = 0
+        while i < len(lines):
+            if lines[i].strip().startswith("!["):
+                # Find the line that closes the image reference with ]( ... )
+                j = i
+                while j < len(lines) and "](" not in lines[j]:
+                    j += 1
+                # Check up to 5 lines after the closing bracket for a description
+                window = lines[j+1 : j+6]
                 if not any("Image Description" in l for l in window):
                     return True
+                i = j + 1
+            else:
+                i += 1
     except Exception:
         pass
     return False
