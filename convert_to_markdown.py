@@ -26,13 +26,18 @@ import openpyxl
 
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-VISION_MODEL       = "gemini-2.5-flash"
+GEMINI_MODELS = {
+    "g": ("gemini-2.5-flash", "gemini-2.5-flash  (latest)"),
+    "f": ("gemini-1.5-flash", "gemini-1.5-flash  (fallback)"),
+}
 GEMINI_CALL_DELAY  = 4   # seconds between Gemini image calls — reduces 503 overload errors
 OLLAMA_HOST        = "http://10.254.254.48:11434"
+OLLAMA_TIMEOUT     = 240  # seconds — 4 minutes for local LLM image calls
 OLLAMA_VISION_MODELS = {
     "1": ("llama4:latest",  "llama4     (108B, powerful)"),
     "2": ("gemma3:12b",     "gemma3:12b  (12B, faster)"),
 }
+VISION_MODEL       = GEMINI_MODELS["g"][0]  # default
 DESCRIBE_IMAGES    = True   # Set to False for a fast run without image descriptions
 _gemini_client     = None   # initialised below once log file is open
 _vision_backend    = "gemini"       # "gemini" or "ollama"
@@ -215,7 +220,7 @@ def describe_image_ollama(image_path, model):
         resp = requests.post(
             f"{OLLAMA_HOST}/api/generate",
             json=payload,
-            timeout=300,  # 5 minutes — local LLMs can be slow on large images
+            timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json().get("response", "").strip()
@@ -472,7 +477,8 @@ def log(msg=""):
 # --- Vision model selection ---
 if DESCRIBE_IMAGES:
     print("Vision model for image descriptions:")
-    print("  g  — Gemini [gemini-2.5-flash]  (cloud)")
+    for key, (_, label) in GEMINI_MODELS.items():
+        print(f"  {key}  — Gemini: {label}  (cloud)")
     for key, (_, label) in OLLAMA_VISION_MODELS.items():
         print(f"  {key}  — Ollama: {label}  (local)")
     print("  n  — Skip image descriptions (fast mode)")
@@ -488,15 +494,17 @@ if DESCRIBE_IMAGES:
         DESCRIBE_IMAGES = False
         log("  Vision: Disabled (fast mode)\n")
     else:
-        # Default: Gemini (blank Enter or 'g')
+        # Gemini — 'g' for 2.5-flash, 'f' for 1.5-flash, default to 'g'
         _vision_backend    = 'gemini'
+        gemini_key         = vis_choice if vis_choice in GEMINI_MODELS else 'g'
+        VISION_MODEL, model_label = GEMINI_MODELS[gemini_key]
         _vision_model_name = VISION_MODEL
         if not GEMINI_API_KEY:
             log("  WARNING: GEMINI_API_KEY not found in .env. Disabling image descriptions.\n")
             DESCRIBE_IMAGES = False
         else:
             _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-            log(f"  Vision: Gemini — {VISION_MODEL}\n")
+            log(f"  Vision: Gemini — {model_label}\n")
 
 # --- Walk and convert ---
 total_converted = 0
