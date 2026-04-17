@@ -27,8 +27,8 @@ import openpyxl
 load_dotenv()
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
 GEMINI_MODELS = {
-    "g": ("gemini-2.5-flash", "gemini-2.5-flash  (latest)"),
-    "f": ("gemini-1.5-flash", "gemini-1.5-flash  (fallback)"),
+    "g": ("gemini-2.5-flash",      "gemini-2.5-flash      (latest)"),
+    "f": ("gemini-2.0-flash-lite", "gemini-2.0-flash-lite (lighter, less loaded)"),
 }
 GEMINI_CALL_DELAY  = 4   # seconds between Gemini image calls — reduces 503 overload errors
 OLLAMA_HOST        = "http://10.254.254.48:11434"
