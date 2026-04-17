@@ -21,14 +21,39 @@ import argparse
 import requests
 from pathlib import Path
 from datetime import datetime
+from dotenv import load_dotenv
+from google import genai
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION
 # ---------------------------------------------------------------------------
 
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 OLLAMA_HOST    = "http://10.254.254.48:11434"
-OLLAMA_MODEL   = "qwen2.5:14b"   # run `ollama list` on the server to confirm
-OLLAMA_TIMEOUT = 300             # seconds — CPU inference can be slow
+OLLAMA_MODEL   = "qwen2.5:14b"   # default; overridden by menu selection at runtime
+OLLAMA_TIMEOUT = 300             # seconds — 5 minutes for local LLM
+
+GEMINI_MODELS = {
+    "g": ("gemini-2.5-flash", "gemini-2.5-flash  (fast, cloud)"),
+    "f": ("gemini-2.5-pro",   "gemini-2.5-pro    (more capacity, cloud)"),
+}
+GEMINI_CALL_DELAY = 2   # seconds between Gemini calls
+
+# Display labels for known Ollama models — unlisted models show name only
+OLLAMA_MODEL_LABELS = {
+    "qwen2.5:14b":          "qwen2.5:14b         (14B, balanced — default)",
+    "qwen2.5:32b":          "qwen2.5:32b         (32B, higher quality, slower)",
+    "llama4:latest":        "llama4              (108B, powerful, very slow on CPU)",
+    "mistral-large:latest": "mistral-large       (123B, strong reasoning, slow)",
+    "gemma3:12b":           "gemma3:12b          (12B, fast, lighter)",
+    "phi4-mini:latest":     "phi4-mini           (3.8B, fastest, basic quality)",
+}
+
+_llm_backend    = "ollama"   # "ollama" or "gemini" — set by menu
+_llm_model_name = OLLAMA_MODEL
+_gemini_client  = None
 
 VAULT_DIR = Path("onenote_audit")            # Obsidian vault root
 MD_DIR    = VAULT_DIR / "02_Markdown"
@@ -184,7 +209,7 @@ def call_ollama(prompt):
     try:
         resp = requests.post(
             f"{OLLAMA_HOST}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            json={"model": _llm_model_name, "prompt": prompt, "stream": False},
             timeout=OLLAMA_TIMEOUT,
         )
         resp.raise_for_status()
@@ -197,8 +222,38 @@ def call_ollama(prompt):
         return None
 
 
+def call_gemini(prompt):
+    """Send a prompt to Gemini and return the response string."""
+    time.sleep(GEMINI_CALL_DELAY)
+    wait = 20
+    for attempt in range(3):
+        try:
+            response = _gemini_client.models.generate_content(
+                model=_llm_model_name,
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            err = str(e)
+            if "503" in err and attempt < 2:
+                safe_log(f"    [Retry {attempt+1}/3 in {wait}s]: {e}")
+                time.sleep(wait)
+                wait = min(wait + 20, 60)
+            else:
+                safe_log(f"    [Summarisation error]: {e}")
+                return None
+    return None
+
+
+def call_llm(prompt):
+    """Dispatch to the selected LLM backend."""
+    if _llm_backend == "gemini":
+        return call_gemini(prompt)
+    return call_ollama(prompt)
+
+
 def summarise_page(body, section, page_title):
-    """Choose the right prompt and call Ollama. Returns (summary, tags)."""
+    """Choose the right prompt and call the LLM. Returns (summary, tags)."""
     is_candidate_page = (
         section.lower().endswith("candidates") and
         page_title.lower() in ("yes", "no", "maybe")
@@ -206,13 +261,13 @@ def summarise_page(body, section, page_title):
 
     if is_candidate_page:
         prompt   = CANDIDATES_PROMPT.format(page_title=page_title, content=body)
-        response = call_ollama(prompt)
+        response = call_llm(prompt)
         if response is None:
             return None, []
         return response, []          # no tags for candidate list pages
     else:
         prompt   = SYNTHESIS_PROMPT.format(content=body)
-        response = call_ollama(prompt)
+        response = call_llm(prompt)
         if response is None:
             return None, []
         return parse_tags_from_response(response)
@@ -234,7 +289,6 @@ print("  OneNote Markdown → Page Summaries")
 print("=" * 60)
 print(f"  Source : {MD_DIR.resolve()}")
 print(f"  Output : {SUM_DIR.resolve()}")
-print(f"  Model  : {OLLAMA_MODEL} via {OLLAMA_HOST}")
 print()
 
 # --- Log file ---
@@ -247,23 +301,53 @@ def log(msg=""):
     print(msg)
     _log_file.write(msg + "\n")
 
-# --- Check Ollama is reachable and model is available ---
+# --- LLM model selection ---
+# Fetch available Ollama models for the menu
+_ollama_models = []
 try:
-    r      = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
+    r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=10)
     r.raise_for_status()
-    models = [m["name"] for m in r.json().get("models", [])]
-    if not any(OLLAMA_MODEL in m for m in models):
-        log(f"  WARNING: '{OLLAMA_MODEL}' not found in Ollama.")
-        log(f"  Available: {', '.join(models)}")
-        log(f"  Update OLLAMA_MODEL at the top of this script and re-run.\n")
+    _ollama_models = sorted(m["name"] for m in r.json().get("models", []))
+except Exception:
+    pass
+
+print("LLM model for summarisation:")
+for key, (_, label) in GEMINI_MODELS.items():
+    print(f"  {key}  — Gemini: {label}")
+if _ollama_models:
+    for idx, name in enumerate(_ollama_models, 1):
+        label = OLLAMA_MODEL_LABELS.get(name, name)
+        print(f"  {idx}  — Ollama: {label}")
+else:
+    print(f"  (Ollama unreachable at {OLLAMA_HOST})")
+print()
+
+llm_choice = input(f"Model choice [{OLLAMA_MODEL}]: ").strip().lower()
+print()
+
+if llm_choice in GEMINI_MODELS:
+    _llm_backend    = "gemini"
+    _llm_model_name, model_label = GEMINI_MODELS[llm_choice]
+    if not GEMINI_API_KEY:
+        print("  ERROR: GEMINI_API_KEY not found in .env. Cannot use Gemini.")
         _log_file.close()
         sys.exit(1)
-    log(f"  Ollama ready. Model: {OLLAMA_MODEL}\n")
-except requests.exceptions.ConnectionError:
-    log(f"  ERROR: Cannot reach Ollama at {OLLAMA_HOST}")
-    log(f"  Check that Ollama is running and OLLAMA_HOST is correct.\n")
-    _log_file.close()
-    sys.exit(1)
+    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    log(f"  LLM: Gemini — {model_label}\n")
+elif llm_choice.isdigit() and 1 <= int(llm_choice) <= len(_ollama_models):
+    _llm_backend    = "ollama"
+    _llm_model_name = _ollama_models[int(llm_choice) - 1]
+    log(f"  LLM: Ollama — {_llm_model_name}\n")
+else:
+    # Default — use OLLAMA_MODEL
+    _llm_backend    = "ollama"
+    _llm_model_name = OLLAMA_MODEL
+    if _ollama_models and not any(_llm_model_name in m for m in _ollama_models):
+        log(f"  WARNING: '{_llm_model_name}' not found in Ollama.")
+        log(f"  Available: {', '.join(_ollama_models)}\n")
+        _log_file.close()
+        sys.exit(1)
+    log(f"  LLM: Ollama — {_llm_model_name}\n")
 
 # --- Force / overwrite prompt ---
 force = args.force
