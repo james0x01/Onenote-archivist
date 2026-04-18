@@ -426,7 +426,7 @@ for nb_idx, notebook in enumerate(notebooks, 1):
         # --- Fetch ALL pages in this section (paginated) ---
         pages = get_all_pages(
             f"{GRAPH_BASE}/me/onenote/sections/{section['id']}/pages"
-            f"?$select=id,title,contentUrl,lastModifiedDateTime",
+            f"?$select=id,title,contentUrl,lastModifiedDateTime,level,order",
             headers
         )
 
@@ -481,7 +481,9 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             is_update = entry is not None
             manifest.setdefault("pages", {})[page_key] = {
                 "lastModifiedDateTime": last_modified,
-                "pulled": datetime.now().isoformat()
+                "pulled": datetime.now().isoformat(),
+                "level": page.get("level", 0),
+                "order": page.get("order", 0),
             }
 
             nb_images      += media_count

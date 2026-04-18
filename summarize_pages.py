@@ -87,14 +87,35 @@ Notes:
 {content}
 """
 
-# Used for Yes / No / Maybe pages inside a Candidates section
+# Used for Yes / No / Maybe / In-process pages inside a Candidates section
 CANDIDATES_PROMPT = """\
-The following is a page of interview candidate names listed under the \
-category "{page_title}".
-Extract only the candidate names exactly as they appear.
-Return a simple markdown list of names — no analysis, no commentary.
+The following is a list of interview candidates grouped by hiring status.
+Extract the candidate names exactly as they appear, preserving their groupings.
+Return a markdown list with each status as a ## heading, and names as bullet points beneath it.
+Do not add analysis, commentary, or change any names.
+
+Example output format:
+## Yes
+- Jane Smith
+- John Doe
+
+## No
+- Bob Jones
+
+## Maybe
+- Alice Brown
 
 Notes:
+{content}
+"""
+
+# Used to generate a consolidated roster combining all status pages for a section
+CANDIDATES_ROSTER_PROMPT = """\
+The following contains candidate names from multiple hiring status lists for the same team.
+Each section is labeled with its status (Yes, No, Maybe, In-process, etc.).
+Combine them into a single clean roster with each status as a ## heading and names as bullet points.
+Preserve all names exactly. Do not add analysis or commentary.
+
 {content}
 """
 
@@ -254,9 +275,10 @@ def call_llm(prompt):
 
 def summarise_page(body, section, page_title):
     """Choose the right prompt and call the LLM. Returns (summary, tags)."""
+    CANDIDATE_STATUS_PAGES = {"yes", "no", "maybe", "in-process", "in process", "pipeline"}
     is_candidate_page = (
         section.lower().endswith("candidates") and
-        page_title.lower() in ("yes", "no", "maybe")
+        page_title.lower() in CANDIDATE_STATUS_PAGES
     )
 
     if is_candidate_page:
@@ -521,6 +543,117 @@ for md_file in all_pages:
         total_errors += 1
 
 total_elapsed = time.time() - script_start
+
+# ---------------------------------------------------------------------------
+# CONSOLIDATED CANDIDATE ROSTERS
+# Uses page level/order from manifest to group candidates under their
+# status header (Yes/No/Maybe/In-process) exactly as they appear in OneNote.
+# Falls back to listing all candidates alphabetically if manifest has no
+# hierarchy data (e.g. pages pulled before this fix was deployed).
+# ---------------------------------------------------------------------------
+
+CANDIDATE_STATUS_PAGES = {"yes", "no", "maybe", "in-process", "in process", "pipeline"}
+
+def load_manifest_for(notebook):
+    """Load manifest.json for a notebook from 01_Raw_Audit."""
+    path = RAW_DIR / notebook / "manifest.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"pages": {}}
+
+# Find all Candidates sections in selected notebooks
+roster_notebooks = set()
+for md_file in MD_DIR.rglob("*.md"):
+    parts = md_file.relative_to(MD_DIR).parts
+    if (len(parts) >= 2
+            and md_file.parent.name.lower().endswith("candidates")
+            and parts[0] in selected_nbs):
+        roster_notebooks.add(parts[0])
+
+if roster_notebooks:
+    log(f"\nGenerating candidate rosters for: {', '.join(sorted(roster_notebooks))}")
+
+import json as _json  # ensure json is available here
+
+for notebook in sorted(roster_notebooks):
+    candidates_dir = MD_DIR / notebook / "Candidates"
+    if not candidates_dir.exists():
+        # Try case-insensitive match
+        matches = [d for d in (MD_DIR / notebook).iterdir()
+                   if d.is_dir() and d.name.lower() == "candidates"]
+        if not matches:
+            continue
+        candidates_dir = matches[0]
+
+    roster_file = SUM_DIR / notebook / candidates_dir.name / "_Candidates_Roster.md"
+    manifest    = load_manifest_for(notebook)
+    pages_meta  = manifest.get("pages", {})
+
+    # Collect all pages in this Candidates section with their level/order
+    section_key_prefix = f"Candidates/"
+    candidate_pages = []
+    for key, meta in pages_meta.items():
+        if key.startswith(section_key_prefix):
+            page_name = key[len(section_key_prefix):]
+            candidate_pages.append({
+                "name":  page_name,
+                "level": meta.get("level", 0),
+                "order": meta.get("order", 0),
+            })
+
+    # Sort by order to preserve OneNote visual sequence
+    candidate_pages.sort(key=lambda p: p["order"])
+
+    if not candidate_pages:
+        log(f"  [Roster skip] No pages found in manifest for {notebook}/Candidates")
+        continue
+
+    # Check if we have hierarchy data
+    has_hierarchy = any(p["level"] > 0 for p in candidate_pages)
+
+    if has_hierarchy:
+        # Group candidates under their status header using level/order
+        roster_lines = []
+        current_status = None
+        for p in candidate_pages:
+            if p["level"] == 0:
+                # This is a status header (Yes / No / Maybe / etc.)
+                current_status = p["name"]
+                roster_lines.append(f"\n## {p['name']}\n")
+            else:
+                # This is a candidate sub-page
+                md_path = candidates_dir / f"{p['name']}.md"
+                sum_path = SUM_DIR / notebook / candidates_dir.name / f"{p['name']}.md"
+                if sum_path.exists():
+                    roster_lines.append(f"- [[{p['name']}]]")
+                else:
+                    roster_lines.append(f"- {p['name']}")
+        roster_content = "\n".join(roster_lines).strip()
+        log(f"  Roster (hierarchy): {notebook}/Candidates")
+    else:
+        # No hierarchy data — fall back to alphabetical list with note
+        log(f"  Roster (flat — re-pull to get groupings): {notebook}/Candidates")
+        names = [p["name"] for p in candidate_pages
+                 if p["name"].lower() not in CANDIDATE_STATUS_PAGES]
+        roster_content = (
+            "> **Note:** Page hierarchy not yet available. "
+            "Re-run `audit_pull_All.py` to capture Yes/No/Maybe groupings.\n\n"
+            + "\n".join(f"- {n}" for n in sorted(names))
+        )
+
+    fm_lines = [
+        "---",
+        f'notebook: "{notebook}"',
+        f'title: "Candidates Roster"',
+        f'summarised: "{datetime.now().strftime("%Y-%m-%d")}"',
+        f'summarised_by: "{_llm_model_name}"',
+        "tags: [candidates, roster]",
+        "---\n",
+    ]
+    os.makedirs(str(roster_file.parent), exist_ok=True)
+    output = "\n".join(fm_lines) + f"# Candidates Roster\n\n{roster_content}\n"
+    roster_file.write_text(output, encoding="utf-8")
 
 log(f"\n{'=' * 60}")
 log(f"  SUMMARISATION COMPLETE")
