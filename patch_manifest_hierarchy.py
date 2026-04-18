@@ -177,6 +177,7 @@ def load_manifest(nb_dir: Path) -> dict:
 
 def save_manifest(nb_dir: Path, manifest: dict):
     path = nb_dir / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
@@ -244,6 +245,10 @@ for nb in selected:
 
     sections = get_sections_recursive(nb["id"], headers)
     print(f"    {len(sections)} section(s)")
+
+    if not sections:
+        print(f"    [Skip — no sections found (shared or empty notebook)]\n")
+        continue
 
     nb_patched = 0
     nb_added   = 0
