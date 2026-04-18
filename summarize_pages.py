@@ -32,8 +32,8 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 OLLAMA_HOST    = "http://10.254.254.48:11434"
-OLLAMA_MODEL   = "qwen2.5:14b"   # default; overridden by menu selection at runtime
-OLLAMA_TIMEOUT = 300             # seconds — 5 minutes for local LLM
+OLLAMA_MODEL   = "qwen2.5:32b"   # default; overridden by menu selection at runtime
+OLLAMA_TIMEOUT = 600             # seconds — 10 minutes for local LLM
 
 GEMINI_MODELS = {
     "g": ("gemini-2.5-flash", "gemini-2.5-flash  (fast, cloud)"),
@@ -43,8 +43,8 @@ GEMINI_CALL_DELAY = 2   # seconds between Gemini calls
 
 # Display labels for known Ollama models — unlisted models show name only
 OLLAMA_MODEL_LABELS = {
-    "qwen2.5:14b":          "qwen2.5:14b         (14B, balanced — default)",
-    "qwen2.5:32b":          "qwen2.5:32b         (32B, higher quality, slower)",
+    "qwen2.5:14b":          "qwen2.5:14b         (14B, balanced)",
+    "qwen2.5:32b":          "qwen2.5:32b         (32B, higher quality — default)",
     "llama4:latest":        "llama4              (108B, powerful, very slow on CPU)",
     "mistral-large:latest": "mistral-large       (123B, strong reasoning, slow)",
     "gemma3:12b":           "gemma3:12b          (12B, fast, lighter)",
@@ -494,6 +494,7 @@ for md_file in all_pages:
         fm_lines.append(f"tags: {tags_yaml}")
         fm_lines.append(f'source_markdown: "{wiki_link(md_file, page_title + " (Full Notes)")}"')
         fm_lines.append(f'summarised: "{datetime.now().strftime("%Y-%m-%d")}"')
+        fm_lines.append(f'summarised_by: "{_llm_model_name}"')
         fm_lines.append("---\n")
         frontmatter = "\n".join(fm_lines)
 
