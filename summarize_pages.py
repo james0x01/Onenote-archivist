@@ -613,22 +613,51 @@ for notebook in sorted(roster_notebooks):
     has_hierarchy = any(p["level"] > 0 for p in candidate_pages)
 
     if has_hierarchy:
-        # Group candidates under their status header using level/order
-        roster_lines = []
-        current_status = None
+        # Walk pages in order, grouping level-1 sub-pages under their preceding
+        # level-0 parent.  Status pages (yes/no/maybe/…) render as ## headings
+        # with candidate bullets; everything else (templates, resources, etc.)
+        # is collected into an "Other Pages" block at the bottom of the roster.
+        groups = []
+        current_group = None
         for p in candidate_pages:
             if p["level"] == 0:
-                # This is a status header (Yes / No / Maybe / etc.)
-                current_status = p["name"]
-                roster_lines.append(f"\n## {p['name']}\n")
+                current_group = {
+                    "name":      p["name"],
+                    "is_status": p["name"].lower() in CANDIDATE_STATUS_PAGES,
+                    "children":  [],
+                }
+                groups.append(current_group)
             else:
-                # This is a candidate sub-page
-                md_path = candidates_dir / f"{p['name']}.md"
-                sum_path = SUM_DIR / notebook / candidates_dir.name / f"{p['name']}.md"
-                if sum_path.exists():
-                    roster_lines.append(f"- [[{p['name']}]]")
+                if current_group is not None:
+                    current_group["children"].append(p["name"])
                 else:
-                    roster_lines.append(f"- {p['name']}")
+                    # Orphaned sub-page — create an implicit "Other" group
+                    if not groups or groups[-1]["name"] != "_other_":
+                        current_group = {"name": "_other_", "is_status": False, "children": []}
+                        groups.append(current_group)
+                    current_group["children"].append(p["name"])
+
+        def _child_link(child_name):
+            sum_path = SUM_DIR / notebook / candidates_dir.name / f"{child_name}.md"
+            return f"- [[{child_name}]]" if sum_path.exists() else f"- {child_name}"
+
+        status_lines = []
+        other_lines  = []
+        for g in groups:
+            if g["is_status"]:
+                status_lines.append(f"\n## {g['name']}\n")
+                for child in g["children"]:
+                    status_lines.append(_child_link(child))
+            else:
+                heading = "Other Pages" if g["name"] == "_other_" else g["name"]
+                other_lines.append(f"\n### {heading}\n")
+                for child in g["children"]:
+                    other_lines.append(_child_link(child))
+
+        roster_lines = status_lines
+        if other_lines:
+            roster_lines += ["\n\n---", "\n## Templates & Other Pages"] + other_lines
+
         roster_content = "\n".join(roster_lines).strip()
         log(f"  Roster (hierarchy): {notebook}/Candidates")
     else:
