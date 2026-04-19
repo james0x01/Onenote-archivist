@@ -16,6 +16,7 @@ TODO: Phase 2 — summarize_rollups.py will read these page summaries and
 import os
 import re
 import sys
+import json
 import time
 import argparse
 import requests
@@ -573,8 +574,6 @@ for md_file in MD_DIR.rglob("*.md"):
 
 if roster_notebooks:
     log(f"\nGenerating candidate rosters for: {', '.join(sorted(roster_notebooks))}")
-
-import json as _json  # ensure json is available here
 
 for notebook in sorted(roster_notebooks):
     candidates_dir = MD_DIR / notebook / "Candidates"
