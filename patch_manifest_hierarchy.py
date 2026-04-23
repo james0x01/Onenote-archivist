@@ -264,13 +264,15 @@ for nb in selected:
             headers
         )
 
-        for page in pages:
+        for idx, page in enumerate(pages):
             title     = re.sub(r'[\\/*?:"<>|]', "", page.get("title") or "Untitled_Page")
             page_key  = "/".join(filter(None, [
                 sec_path.replace("\\", "/"), sec_name, title
             ]))
-            level     = page.get("level", 0)
-            order     = page.get("order", 0)
+            # level/order are absent for personal Microsoft accounts.
+            # Fall back: level=0 (top-level), order=response index (visual sequence).
+            level     = page.get("level") if page.get("level") is not None else 0
+            order     = page.get("order") if page.get("order") is not None else idx
 
             existing = manifest.get("pages", {}).get(page_key)
 

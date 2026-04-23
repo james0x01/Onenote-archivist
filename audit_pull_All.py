@@ -430,7 +430,7 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             headers
         )
 
-        for page in pages:
+        for page_idx, page in enumerate(pages):
             title = re.sub(r'[\\/*?:"<>|]', "", page.get('title') or "Untitled_Page")
             page_dir = os.path.join(root_audit_dir, section_path, title)
             media_dir = os.path.join(page_dir, "media")
@@ -482,8 +482,8 @@ for nb_idx, notebook in enumerate(notebooks, 1):
             manifest.setdefault("pages", {})[page_key] = {
                 "lastModifiedDateTime": last_modified,
                 "pulled": datetime.now().isoformat(),
-                "level": page.get("level", 0),
-                "order": page.get("order", 0),
+                "level": page.get("level") if page.get("level") is not None else 0,
+                "order": page.get("order") if page.get("order") is not None else page_idx,
             }
 
             nb_images      += media_count

@@ -601,74 +601,91 @@ for notebook in sorted(roster_notebooks):
                 "order": meta.get("order", 0),
             })
 
-    # Sort by order to preserve OneNote visual sequence
+    # Sort by order (response index when API level/order fields are absent)
     candidate_pages.sort(key=lambda p: p["order"])
 
     if not candidate_pages:
         log(f"  [Roster skip] No pages found in manifest for {notebook}/Candidates")
         continue
 
-    # Check if we have hierarchy data
-    has_hierarchy = any(p["level"] > 0 for p in candidate_pages)
+    # -----------------------------------------------------------------------
+    # Positional-divider grouping.
+    #
+    # The OneNote Graph API for personal accounts does not return level/order
+    # fields.  However, pages are returned in their visual section order.
+    # patch_manifest_hierarchy.py stores the response index as 'order', so
+    # sorting by order recreates the OneNote visual sequence.
+    #
+    # We walk in that order: blank status pages (Yes/No/Maybe/…) act as
+    # section dividers; everything that follows belongs to that group until
+    # the next divider.  Pages before any status page → "Other / Unassigned".
+    # Non-status, non-blank level-0 pages (templates etc.) → "Templates & Other".
+    # -----------------------------------------------------------------------
 
-    if has_hierarchy:
-        # Walk pages in order, grouping level-1 sub-pages under their preceding
-        # level-0 parent.  Status pages (yes/no/maybe/…) render as ## headings
-        # with candidate bullets; everything else (templates, resources, etc.)
-        # is collected into an "Other Pages" block at the bottom of the roster.
-        groups = []
-        current_group = None
-        for p in candidate_pages:
-            if p["level"] == 0:
-                current_group = {
-                    "name":      p["name"],
-                    "is_status": p["name"].lower() in CANDIDATE_STATUS_PAGES,
-                    "children":  [],
-                }
-                groups.append(current_group)
+    def _page_link(name):
+        sp = SUM_DIR / notebook / candidates_dir.name / f"{name}.md"
+        return f"- [[{name}]]" if sp.exists() else f"- {name}"
+
+    def _is_blank(name):
+        md = candidates_dir / f"{name}.md"
+        if not md.exists():
+            return True
+        text = md.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            end = text.find("---", 3)
+            body = text[end + 3:].strip() if end != -1 else text
+        else:
+            body = text.strip()
+        return not body
+
+    groups         = []   # [{"heading": str, "members": [str]}]
+    current_group  = None
+    other_pages    = []   # non-status pages with actual content (templates etc.)
+
+    for p in candidate_pages:
+        name       = p["name"]
+        is_status  = name.lower() in CANDIDATE_STATUS_PAGES
+        blank      = _is_blank(name)
+
+        if is_status and blank:
+            # Blank status page → start a new group
+            current_group = {"heading": name, "members": []}
+            groups.append(current_group)
+        elif is_status and not blank:
+            # Status page with content (unusual) → treat as member of current group
+            if current_group is not None:
+                current_group["members"].append(name)
             else:
-                if current_group is not None:
-                    current_group["children"].append(p["name"])
-                else:
-                    # Orphaned sub-page — create an implicit "Other" group
-                    if not groups or groups[-1]["name"] != "_other_":
-                        current_group = {"name": "_other_", "is_status": False, "children": []}
-                        groups.append(current_group)
-                    current_group["children"].append(p["name"])
-
-        def _child_link(child_name):
-            sum_path = SUM_DIR / notebook / candidates_dir.name / f"{child_name}.md"
-            return f"- [[{child_name}]]" if sum_path.exists() else f"- {child_name}"
-
-        status_lines = []
-        other_lines  = []
-        for g in groups:
-            if g["is_status"]:
-                status_lines.append(f"\n## {g['name']}\n")
-                for child in g["children"]:
-                    status_lines.append(_child_link(child))
+                other_pages.append(name)
+        else:
+            # Regular candidate or template page
+            if current_group is not None:
+                current_group["members"].append(name)
             else:
-                heading = "Other Pages" if g["name"] == "_other_" else g["name"]
-                other_lines.append(f"\n### {heading}\n")
-                for child in g["children"]:
-                    other_lines.append(_child_link(child))
+                other_pages.append(name)   # before first status marker
 
-        roster_lines = status_lines
-        if other_lines:
-            roster_lines += ["\n\n---", "\n## Templates & Other Pages"] + other_lines
+    roster_lines = []
+    for g in groups:
+        roster_lines.append(f"\n## {g['heading']}\n")
+        for m in g["members"]:
+            roster_lines.append(_page_link(m))
 
-        roster_content = "\n".join(roster_lines).strip()
-        log(f"  Roster (hierarchy): {notebook}/Candidates")
-    else:
-        # No hierarchy data — fall back to alphabetical list with note
-        log(f"  Roster (flat — re-pull to get groupings): {notebook}/Candidates")
-        names = [p["name"] for p in candidate_pages
-                 if p["name"].lower() not in CANDIDATE_STATUS_PAGES]
-        roster_content = (
-            "> **Note:** Page hierarchy not yet available. "
-            "Re-run `audit_pull_All.py` to capture Yes/No/Maybe groupings.\n\n"
-            + "\n".join(f"- {n}" for n in sorted(names))
-        )
+    if other_pages:
+        # Separate out real templates (non-blank, non-candidate-name pages)
+        templates = [n for n in other_pages if not _is_blank(n)
+                     and n.lower() not in CANDIDATE_STATUS_PAGES]
+        unassigned = [n for n in other_pages if n not in templates]
+        if unassigned:
+            roster_lines.append("\n\n---\n\n## Unassigned\n")
+            for n in unassigned:
+                roster_lines.append(_page_link(n))
+        if templates:
+            roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
+            for n in templates:
+                roster_lines.append(_page_link(n))
+
+    roster_content = "\n".join(roster_lines).strip()
+    log(f"  Roster (positional): {notebook}/Candidates")
 
     fm_lines = [
         "---",
