@@ -540,12 +540,6 @@ for notebook in selected_nbs:
         log(f"[Skip — no manifest]: {notebook}\n")
         continue
 
-    has_hierarchy = any(v.get("level", 0) > 0 for v in pages_meta.values())
-    if not has_hierarchy:
-        log(f"[Skip — no hierarchy data]: {notebook}")
-        log(f"  → Run patch_manifest_hierarchy.py first, then retry.\n")
-        continue
-
     log(f"Notebook: {notebook}")
     section_map          = build_section_map(pages_meta)
     section_rollup_paths = []   # accumulated for notebook rollup
