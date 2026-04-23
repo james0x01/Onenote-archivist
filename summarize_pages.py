@@ -720,6 +720,7 @@ for notebook in sorted(roster_notebooks):
     os.makedirs(str(roster_file.parent), exist_ok=True)
     output = "\n".join(fm_lines) + f"# Candidates Roster\n\n{roster_content}\n"
     roster_file.write_text(output, encoding="utf-8")
+    total_summarised += 1
 
 log(f"\n{'=' * 60}")
 log(f"  SUMMARISATION COMPLETE")
