@@ -638,51 +638,62 @@ for notebook in sorted(roster_notebooks):
             body = text.strip()
         return not body
 
-    groups         = []   # [{"heading": str, "members": [str]}]
-    current_group  = None
-    other_pages    = []   # non-status pages with actual content (templates etc.)
+    def _is_template_header(name):
+        """Pages ending in 'template' act as group headers for their sub-pages."""
+        return name.lower().endswith("template") or name.lower().endswith("templates")
+
+    # Groups carry a type so we can render status groups at top and template
+    # groups in the "Templates & Other Pages" section at the bottom.
+    groups        = []   # [{"heading": str, "kind": "status"|"template", "members": [str]}]
+    current_group = None
+    other_pages   = []   # pages before any divider (or after last divider with no group)
 
     for p in candidate_pages:
-        name       = p["name"]
-        is_status  = name.lower() in CANDIDATE_STATUS_PAGES
-        blank      = _is_blank(name)
+        name              = p["name"]
+        is_status         = name.lower() in CANDIDATE_STATUS_PAGES
+        is_tmpl_header    = _is_template_header(name)
+        blank             = _is_blank(name)
 
-        if is_status and blank:
-            # Blank status page → start a new group
-            current_group = {"heading": name, "members": []}
+        if (is_status and blank) or is_tmpl_header:
+            # Blank status page OR any Template page → start a new group
+            kind          = "status" if is_status else "template"
+            current_group = {"heading": name, "kind": kind, "members": []}
             groups.append(current_group)
         elif is_status and not blank:
-            # Status page with content (unusual) → treat as member of current group
-            if current_group is not None:
-                current_group["members"].append(name)
-            else:
-                other_pages.append(name)
+            # Status page with content (unusual) → member of current group
+            (current_group["members"] if current_group else other_pages).append(name)
         else:
-            # Regular candidate or template page
-            if current_group is not None:
-                current_group["members"].append(name)
-            else:
-                other_pages.append(name)   # before first status marker
+            # Regular candidate page
+            (current_group["members"] if current_group else other_pages).append(name)
+
+    # --- Render ---
+    status_groups   = [g for g in groups if g["kind"] == "status"]
+    template_groups = [g for g in groups if g["kind"] == "template"]
 
     roster_lines = []
-    for g in groups:
+    for g in status_groups:
         roster_lines.append(f"\n## {g['heading']}\n")
         for m in g["members"]:
             roster_lines.append(_page_link(m))
 
     if other_pages:
-        # Separate out real templates (non-blank, non-candidate-name pages)
-        templates = [n for n in other_pages if not _is_blank(n)
-                     and n.lower() not in CANDIDATE_STATUS_PAGES]
-        unassigned = [n for n in other_pages if n not in templates]
+        unassigned = [n for n in other_pages if _is_blank(n)]
+        loose      = [n for n in other_pages if not _is_blank(n)]
         if unassigned:
             roster_lines.append("\n\n---\n\n## Unassigned\n")
             for n in unassigned:
                 roster_lines.append(_page_link(n))
-        if templates:
-            roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
-            for n in templates:
+        if loose:
+            roster_lines.append("\n\n---\n\n## Other\n")
+            for n in loose:
                 roster_lines.append(_page_link(n))
+
+    if template_groups:
+        roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
+        for g in template_groups:
+            roster_lines.append(f"\n### {g['heading']}\n")
+            for m in g["members"]:
+                roster_lines.append(_page_link(m))
 
     roster_content = "\n".join(roster_lines).strip()
     log(f"  Roster (positional): {notebook}/Candidates")
