@@ -589,38 +589,16 @@ for notebook in sorted(roster_notebooks):
     manifest    = load_manifest_for(notebook)
     pages_meta  = manifest.get("pages", {})
 
-    # Collect all pages in this Candidates section with their level/order
-    section_key_prefix = f"Candidates/"
-    candidate_pages = []
-    for key, meta in pages_meta.items():
+    # Collect all pages in this Candidates section
+    section_key_prefix = "Candidates/"
+    all_names = []
+    for key, meta in sorted(pages_meta.items(), key=lambda x: x[1].get("order", 0)):
         if key.startswith(section_key_prefix):
-            page_name = key[len(section_key_prefix):]
-            candidate_pages.append({
-                "name":  page_name,
-                "level": meta.get("level", 0),
-                "order": meta.get("order", 0),
-            })
+            all_names.append(key[len(section_key_prefix):])
 
-    # Sort by order (response index when API level/order fields are absent)
-    candidate_pages.sort(key=lambda p: p["order"])
-
-    if not candidate_pages:
+    if not all_names:
         log(f"  [Roster skip] No pages found in manifest for {notebook}/Candidates")
         continue
-
-    # -----------------------------------------------------------------------
-    # Positional-divider grouping.
-    #
-    # The OneNote Graph API for personal accounts does not return level/order
-    # fields.  However, pages are returned in their visual section order.
-    # patch_manifest_hierarchy.py stores the response index as 'order', so
-    # sorting by order recreates the OneNote visual sequence.
-    #
-    # We walk in that order: blank status pages (Yes/No/Maybe/…) act as
-    # section dividers; everything that follows belongs to that group until
-    # the next divider.  Pages before any status page → "Other / Unassigned".
-    # Non-status, non-blank level-0 pages (templates etc.) → "Templates & Other".
-    # -----------------------------------------------------------------------
 
     def _page_link(name):
         sp = SUM_DIR / notebook / candidates_dir.name / f"{name}.md"
@@ -638,80 +616,97 @@ for notebook in sorted(roster_notebooks):
             body = text.strip()
         return not body
 
-    def _is_template_header(name):
-        """Pages ending in 'template' act as group headers for their sub-pages."""
-        return name.lower().endswith("template") or name.lower().endswith("templates")
-
-    def _is_version_page(name):
-        """Sub-pages of templates are version pages: V1, V2, V1-AppSec, v2-General…"""
-        return bool(re.match(r'^[Vv]\d', name))
-
     # -----------------------------------------------------------------------
-    # Pass 1 — identify template headers and their IMMEDIATELY following
-    # version pages (V1, V2, V1-AppSec…).  Only consecutive version-named
-    # pages count; the first non-version page ends the template group.
-    # This prevents candidates who happen to follow a template page from
-    # being incorrectly grouped under it.
+    # Config-based grouping
+    #
+    # The OneNote API for personal accounts does not expose page hierarchy
+    # (level/order fields are absent).  The API response order does not
+    # reliably reflect the visual OneNote indentation.
+    #
+    # Solution: a per-notebook candidates_groups.json config file lets you
+    # specify groupings once.  The roster then places every known name into
+    # its group and lists anything new as "Unassigned" automatically.
+    #
+    # Config location: 01_Raw_Audit/{Notebook}/candidates_groups.json
+    # Format:
+    #   {
+    #     "Yes":        ["Alice Lee", "Bob Kim"],
+    #     "No":         ["Carol Chen"],
+    #     "Maybe":      ["Dave Jones"],
+    #     "In-process": ["Eve Smith"],
+    #     "Templates": {
+    #       "Sales Template": ["V1", "V2"],
+    #       "SE Template":    ["V1", "V2", "V1-AppSec", "V2-AppSec"]
+    #     }
+    #   }
     # -----------------------------------------------------------------------
-    template_groups   = []    # [{"heading": str, "members": [str]}]
-    template_page_set = set() # all page names consumed by template grouping
+    config_path  = RAW_DIR / notebook / "candidates_groups.json"
+    config       = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log(f"  [Roster warning] Could not read candidates_groups.json: {e}")
 
-    i = 0
-    while i < len(candidate_pages):
-        name = candidate_pages[i]["name"]
-        if _is_template_header(name):
-            versions = []
-            j = i + 1
-            while j < len(candidate_pages) and _is_version_page(candidate_pages[j]["name"]):
-                versions.append(candidate_pages[j]["name"])
-                j += 1
-            template_groups.append({"heading": name, "members": versions})
-            template_page_set.add(name)
-            template_page_set.update(versions)
-            i = j
-        else:
-            i += 1
+    # Names that are status/template pages themselves (never listed as candidates)
+    meta_names = set()
+    meta_names.update(k for k in CANDIDATE_STATUS_PAGES)
+    # also add blank pages from actual section
+    meta_names.update(n for n in all_names if _is_blank(n))
 
-    # -----------------------------------------------------------------------
-    # Pass 2 — process candidates using Yes/No/Maybe blank pages as dividers,
-    # skipping any pages already claimed by a template group.
-    # -----------------------------------------------------------------------
-    status_groups = []   # [{"heading": str, "members": [str]}]
-    current_group = None
-    other_pages   = []   # pages before the first status divider
+    if config:
+        # --- Config-driven render ---
+        templates_cfg = config.pop("Templates", {}) if isinstance(config.get("Templates"), dict) else {}
 
-    for p in candidate_pages:
-        name = p["name"]
-        if name in template_page_set:
-            continue   # handled in pass 1
+        # Build a set of all explicitly assigned names
+        assigned = set()
+        for members in config.values():
+            if isinstance(members, list):
+                assigned.update(members)
+        for members in templates_cfg.values():
+            assigned.update(members)
 
-        is_status = name.lower() in CANDIDATE_STATUS_PAGES
-        blank     = _is_blank(name)
+        roster_lines = []
+        # Status groups in config order
+        for status, members in config.items():
+            if not isinstance(members, list):
+                continue
+            roster_lines.append(f"\n## {status}\n")
+            for m in members:
+                roster_lines.append(_page_link(m))
 
-        if is_status and blank:
-            current_group = {"heading": name, "members": []}
-            status_groups.append(current_group)
-        else:
-            (current_group["members"] if current_group else other_pages).append(name)
-
-    # --- Render ---
-    roster_lines = []
-    for g in status_groups:
-        roster_lines.append(f"\n## {g['heading']}\n")
-        for m in g["members"]:
-            roster_lines.append(_page_link(m))
-
-    if other_pages:
-        unassigned = [n for n in other_pages if _is_blank(n)]
-        loose      = [n for n in other_pages if not _is_blank(n)]
+        # Unassigned = in section but not in any config group and not a meta page
+        unassigned = [n for n in all_names
+                      if n not in assigned and n not in meta_names]
         if unassigned:
             roster_lines.append("\n\n---\n\n## Unassigned\n")
-            for n in unassigned:
+            roster_lines.append("> These pages are not yet in candidates_groups.json\n")
+            for n in sorted(unassigned):
                 roster_lines.append(_page_link(n))
-        if loose:
-            roster_lines.append("\n\n---\n\n## Other\n")
-            for n in loose:
-                roster_lines.append(_page_link(n))
+
+        # Templates block
+        if templates_cfg:
+            roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
+            for tmpl, versions in templates_cfg.items():
+                roster_lines.append(f"\n### {tmpl}\n")
+                for v in versions:
+                    roster_lines.append(_page_link(v))
+
+        roster_content = "\n".join(roster_lines).strip()
+        log(f"  Roster (config): {notebook}/Candidates")
+
+    else:
+        # --- No config: flat alphabetical list with instructions ---
+        candidates = sorted(n for n in all_names if n not in meta_names)
+        roster_lines = [
+            "> **Groupings not configured.**  Create "
+            f"`01_Raw_Audit/{notebook}/candidates_groups.json` to assign "
+            "candidates to Yes / No / Maybe groups.  See script comments for format.\n",
+        ]
+        for n in candidates:
+            roster_lines.append(_page_link(n))
+        roster_content = "\n".join(roster_lines).strip()
+        log(f"  Roster (flat — add candidates_groups.json to enable groupings): {notebook}/Candidates")
 
     if template_groups:
         roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
