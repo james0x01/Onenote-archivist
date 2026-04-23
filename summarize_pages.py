@@ -642,34 +642,59 @@ for notebook in sorted(roster_notebooks):
         """Pages ending in 'template' act as group headers for their sub-pages."""
         return name.lower().endswith("template") or name.lower().endswith("templates")
 
-    # Groups carry a type so we can render status groups at top and template
-    # groups in the "Templates & Other Pages" section at the bottom.
-    groups        = []   # [{"heading": str, "kind": "status"|"template", "members": [str]}]
+    def _is_version_page(name):
+        """Sub-pages of templates are version pages: V1, V2, V1-AppSec, v2-General…"""
+        return bool(re.match(r'^[Vv]\d', name))
+
+    # -----------------------------------------------------------------------
+    # Pass 1 — identify template headers and their IMMEDIATELY following
+    # version pages (V1, V2, V1-AppSec…).  Only consecutive version-named
+    # pages count; the first non-version page ends the template group.
+    # This prevents candidates who happen to follow a template page from
+    # being incorrectly grouped under it.
+    # -----------------------------------------------------------------------
+    template_groups   = []    # [{"heading": str, "members": [str]}]
+    template_page_set = set() # all page names consumed by template grouping
+
+    i = 0
+    while i < len(candidate_pages):
+        name = candidate_pages[i]["name"]
+        if _is_template_header(name):
+            versions = []
+            j = i + 1
+            while j < len(candidate_pages) and _is_version_page(candidate_pages[j]["name"]):
+                versions.append(candidate_pages[j]["name"])
+                j += 1
+            template_groups.append({"heading": name, "members": versions})
+            template_page_set.add(name)
+            template_page_set.update(versions)
+            i = j
+        else:
+            i += 1
+
+    # -----------------------------------------------------------------------
+    # Pass 2 — process candidates using Yes/No/Maybe blank pages as dividers,
+    # skipping any pages already claimed by a template group.
+    # -----------------------------------------------------------------------
+    status_groups = []   # [{"heading": str, "members": [str]}]
     current_group = None
-    other_pages   = []   # pages before any divider (or after last divider with no group)
+    other_pages   = []   # pages before the first status divider
 
     for p in candidate_pages:
-        name              = p["name"]
-        is_status         = name.lower() in CANDIDATE_STATUS_PAGES
-        is_tmpl_header    = _is_template_header(name)
-        blank             = _is_blank(name)
+        name = p["name"]
+        if name in template_page_set:
+            continue   # handled in pass 1
 
-        if (is_status and blank) or is_tmpl_header:
-            # Blank status page OR any Template page → start a new group
-            kind          = "status" if is_status else "template"
-            current_group = {"heading": name, "kind": kind, "members": []}
-            groups.append(current_group)
-        elif is_status and not blank:
-            # Status page with content (unusual) → member of current group
-            (current_group["members"] if current_group else other_pages).append(name)
+        is_status = name.lower() in CANDIDATE_STATUS_PAGES
+        blank     = _is_blank(name)
+
+        if is_status and blank:
+            current_group = {"heading": name, "members": []}
+            status_groups.append(current_group)
         else:
-            # Regular candidate page
             (current_group["members"] if current_group else other_pages).append(name)
 
     # --- Render ---
-    status_groups   = [g for g in groups if g["kind"] == "status"]
-    template_groups = [g for g in groups if g["kind"] == "template"]
-
     roster_lines = []
     for g in status_groups:
         roster_lines.append(f"\n## {g['heading']}\n")
