@@ -708,16 +708,6 @@ for notebook in sorted(roster_notebooks):
         roster_content = "\n".join(roster_lines).strip()
         log(f"  Roster (flat — add candidates_groups.json to enable groupings): {notebook}/Candidates")
 
-    if template_groups:
-        roster_lines.append("\n\n---\n\n## Templates & Other Pages\n")
-        for g in template_groups:
-            roster_lines.append(f"\n### {g['heading']}\n")
-            for m in g["members"]:
-                roster_lines.append(_page_link(m))
-
-    roster_content = "\n".join(roster_lines).strip()
-    log(f"  Roster (positional): {notebook}/Candidates")
-
     fm_lines = [
         "---",
         f'notebook: "{notebook}"',
