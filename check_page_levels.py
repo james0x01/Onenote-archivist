@@ -31,14 +31,19 @@ sections = requests.get(
 ).json()
 cand_sec = next(s for s in sections["value"] if s["displayName"] == "Candidates")
 
-# Fetch first 15 pages WITHOUT $select — see every field the API returns
-pages = requests.get(
-    f"{BASE}/sections/{cand_sec['id']}/pages?$top=15",
-    headers=headers
-).json()
+# Fetch ALL pages with $select — the only way level/order are returned
+all_pages = []
+url = f"{BASE}/sections/{cand_sec['id']}/pages?$select=id,title,level,order&$top=100"
+while url:
+    resp = requests.get(url, headers=headers).json()
+    all_pages.extend(resp.get("value", []))
+    url  = resp.get("@odata.nextLink")
 
-print(f"\nRaw fields for first 15 pages in Corelight > Candidates:")
+print(f"\n{len(all_pages)} pages in Corelight > Candidates (with $select=level,order):")
 print(f"{'level':<8} {'order':<20} title")
 print("-" * 60)
-for p in pages["value"]:
-    print(f"{str(p.get('level','?')):<8} {str(p.get('order','?')):<20} {p['title']}")
+for p in all_pages:
+    level = p.get("level")
+    order = p.get("order")
+    marker = " ◄" if p["title"].lower() in ("yes","no","maybe","in-process","in process","pipeline") else ""
+    print(f"{str(level) if level is not None else '(absent)':<8} {str(order) if order is not None else '(absent)':<20} {p['title']}{marker}")
