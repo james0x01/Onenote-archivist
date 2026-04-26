@@ -38,11 +38,17 @@ DROPBOX_BASE = Path("/Users/james/Dropbox/Business/OneNote")
 RAW_DIR      = DROPBOX_BASE / "01_Raw_Audit"
 SUM_DIR      = DROPBOX_BASE / "03_Summaries"
 
-SKIP_SECTIONS   = {"candidates"}
-GEMINI_MODEL    = "gemini-2.5-flash"
-CALL_DELAY      = 2      # seconds between API calls
-SNIPPET_LEN     = 400    # chars of summary body to include per page
-MIN_SECTION_SZ  = 4      # skip sections with fewer pages than this
+SKIP_SECTIONS  = {"candidates"}
+CALL_DELAY     = 2      # seconds between API calls
+SNIPPET_LEN    = 400    # chars of summary body to include per page
+MIN_SECTION_SZ = 4      # skip sections with fewer pages than this
+
+GEMINI_MODELS = {
+    "g": ("gemini-2.5-flash", "gemini-2.5-flash  (fast, cloud)"),
+    "f": ("gemini-2.5-pro",   "gemini-2.5-pro    (more capacity, cloud)"),
+}
+
+_llm_model_name = "gemini-2.5-flash"   # updated by model menu below
 
 # ---------------------------------------------------------------------------
 # PROMPT
@@ -115,7 +121,7 @@ def call_gemini(client, prompt):
     for attempt in range(3):
         try:
             return client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt
+                model=_llm_model_name, contents=prompt
             ).text.strip()
         except Exception as e:
             wait = 20 * (attempt + 1)
@@ -181,6 +187,22 @@ if not GEMINI_API_KEY:
     sys.exit(1)
 
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ---------------------------------------------------------------------------
+# MODEL SELECTION
+# ---------------------------------------------------------------------------
+
+print("LLM model for clustering:")
+for key, (_, label) in GEMINI_MODELS.items():
+    print(f"  {key}  — {label}")
+print()
+
+model_choice = input("Model choice [g]: ").strip().lower() or "g"
+if model_choice in GEMINI_MODELS:
+    _llm_model_name, model_label = GEMINI_MODELS[model_choice]
+else:
+    _llm_model_name, model_label = GEMINI_MODELS["g"]
+print(f"  Using: {model_label}\n")
 
 # ---------------------------------------------------------------------------
 # NOTEBOOK SELECTION
