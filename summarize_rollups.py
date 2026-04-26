@@ -540,6 +540,21 @@ for notebook in selected_nbs:
         log(f"[Skip — no manifest]: {notebook}\n")
         continue
 
+    # Load optional config-driven sub-group definitions
+    groups_config = {}
+    groups_path   = RAW_DIR / notebook / "rollup_groups.json"
+    if groups_path.exists():
+        try:
+            groups_config = json.loads(groups_path.read_text(encoding="utf-8"))
+            configured = sum(
+                1 for v in groups_config.values()
+                if isinstance(v, dict)
+                and any(not k.startswith("_") for k in v)
+            )
+            log(f"  Loaded rollup_groups.json ({configured} section(s) with groups)")
+        except Exception as e:
+            log(f"  [Warning] Could not read rollup_groups.json: {e}")
+
     log(f"Notebook: {notebook}")
     section_map          = build_section_map(pages_meta)
     section_rollup_paths = []   # accumulated for notebook rollup
@@ -555,23 +570,75 @@ for notebook in selected_nbs:
         section_display = sec_key.replace("/", " / ") if sec_key else notebook
         section_folder  = SUM_DIR / notebook / sec_key if sec_key else SUM_DIR / notebook
 
-        groups = group_by_parent(pages)
+        # Look up section config: try full path key first, then leaf name
+        sec_leaf    = sec_key.split("/")[-1] if sec_key else notebook
+        section_cfg = groups_config.get(sec_key) or groups_config.get(sec_leaf) or {}
+        # Strip scaffold/comment keys (anything starting with _)
+        if section_cfg:
+            section_cfg = {k: v for k, v in section_cfg.items()
+                           if not k.startswith("_") and isinstance(v, list)}
 
         # ----------------------------------------------------------------
         # LEVEL 1 — SUB-GROUP ROLLUPS
-        # Each level-0 parent with ≥ MIN_CHILDREN level-1 children
         # ----------------------------------------------------------------
-        # section_inputs: what to feed into the section rollup.
-        # Prefer sub-group rollups; fall back to raw page summaries.
         section_inputs = []
 
-        if DO_SUBGROUP:
+        if section_cfg and DO_SUBGROUP:
+            # --- Config-driven: explicit topic groups ---
+            log(f"  Section: {section_display}  ({len(section_cfg)} group(s) configured)")
+            assigned = set()
+
+            for group_name, members in section_cfg.items():
+                member_paths = [section_folder / f"{m}.md" for m in members]
+                available    = [p for p in member_paths if p.exists()]
+                assigned.update(members)
+
+                if len(available) < MIN_CHILDREN:
+                    section_inputs.extend(available)
+                    continue
+
+                rollup_path = section_folder / f"_rollup_{group_name}.md"
+                t0          = time.time()
+                result = run_rollup(
+                    SUBGROUP_PROMPT,
+                    {"parent": group_name},
+                    rollup_path, "subgroup",
+                    notebook, section_display,
+                    f"Rollup: {group_name}",
+                    available, [p.stem for p in available],
+                )
+                elapsed = time.time() - t0
+
+                if result is not None:
+                    section_inputs.append(result)
+                    if rollup_path.exists():
+                        meta, _ = parse_frontmatter(rollup_path.read_text(encoding="utf-8"))
+                        if meta.get("summarised", "") == datetime.now().strftime("%Y-%m-%d"):
+                            total_generated += 1
+                            processing_times.append(elapsed)
+                        else:
+                            total_skipped += 1
+                else:
+                    total_errors += 1
+                    section_inputs.extend(available)  # degrade gracefully
+
+            # Ungrouped pages pass through directly to section rollup
+            for p in pages:
+                if p["name"] not in assigned:
+                    sp = section_folder / f"{p['name']}.md"
+                    if sp.exists():
+                        section_inputs.append(sp)
+
+        elif DO_SUBGROUP:
+            # --- Level-based: use manifest level/order hierarchy ---
+            log(f"  Section: {section_display}")
+            groups = group_by_parent(pages)
+
             for g in groups:
                 parent   = g["parent"]
                 children = g["children"]
 
                 if not parent:
-                    # Orphaned sub-pages — include their summaries in section
                     for c in children:
                         p = section_folder / f"{c['name']}.md"
                         if p.exists():
@@ -581,7 +648,6 @@ for notebook in selected_nbs:
                 parent_sum = section_folder / f"{parent['name']}.md"
 
                 if len(children) < MIN_CHILDREN:
-                    # Not enough children — use parent summary directly
                     if parent_sum.exists():
                         section_inputs.append(parent_sum)
                     continue
@@ -597,8 +663,6 @@ for notebook in selected_nbs:
                     continue
 
                 rollup_path = section_folder / f"_rollup_{parent['name']}.md"
-
-                # Include parent's own summary as the first block (if it has content)
                 input_paths = ([parent_sum] if parent_sum.exists() else []) + available
                 input_names = (
                     ([parent["name"] + " (overview)"] if parent_sum.exists() else [])
@@ -619,7 +683,6 @@ for notebook in selected_nbs:
                 if result is not None:
                     section_inputs.append(result)
                     if rollup_path.exists():
-                        # Only count as generated if it was freshly written
                         meta, _ = parse_frontmatter(rollup_path.read_text(encoding="utf-8"))
                         if meta.get("summarised", "") == datetime.now().strftime("%Y-%m-%d"):
                             total_generated += 1
@@ -629,10 +692,11 @@ for notebook in selected_nbs:
                 else:
                     total_errors += 1
                     if parent_sum.exists():
-                        section_inputs.append(parent_sum)   # degrade gracefully
+                        section_inputs.append(parent_sum)
 
         else:
-            # Sub-group level not requested — collect all page summaries for section rollup
+            # Sub-group level not requested — collect all page summaries
+            log(f"  Section: {section_display}")
             for p in pages:
                 sp = section_folder / f"{p['name']}.md"
                 if sp.exists():
