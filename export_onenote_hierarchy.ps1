@@ -1,9 +1,9 @@
 # export_onenote_hierarchy.ps1
 # Extracts exact page hierarchy from OneNote desktop via COM API.
-# Writes rollup_groups.json per notebook — 100% accurate, no LLM needed.
+# Writes rollup_groups.json per notebook -- 100% accurate, no LLM needed.
 #
 # Requirements: Windows + OneNote desktop + notebooks synced
-# No extra installs needed — uses built-in PowerShell COM support.
+# No extra installs needed -- uses built-in PowerShell COM support.
 #
 # Usage:
 #   .\export_onenote_hierarchy.ps1
@@ -15,17 +15,21 @@
 # Then SCP to Cerebro and run: python3 summarize_rollups.py --force
 
 param(
-    [string]$OutputDir       = ".\rollup_groups",
-    [string]$FilterNotebook  = ""
+    [string]$OutputDir      = ".\rollup_groups",
+    [string]$FilterNotebook = ""
 )
 
 Set-StrictMode -Off
 $ErrorActionPreference = "Stop"
 
 $SkipSections = @("candidates")
-$MinSectionSz = 4   # ignore sections with fewer pages than this
+$MinSectionSz = 4
 
-function Remove-InvalidChars([string]$Name) {
+# ---------------------------------------------------------------------------
+# Helper: strip characters that are illegal in folder/file names
+# ---------------------------------------------------------------------------
+function Remove-InvalidChars {
+    param([string]$Name)
     $result = $Name
     foreach ($c in [System.IO.Path]::GetInvalidFileNameChars()) {
         $result = $result.Replace([string]$c, '')
@@ -33,26 +37,28 @@ function Remove-InvalidChars([string]$Name) {
     return $result.Trim()
 }
 
+# ---------------------------------------------------------------------------
+# Banner
+# ---------------------------------------------------------------------------
 Write-Host ("=" * 60)
-Write-Host "  export_onenote_hierarchy.ps1 — OneNote COM export"
+Write-Host "  export_onenote_hierarchy.ps1 -- OneNote COM export"
 Write-Host ("=" * 60)
 Write-Host ""
 
 # ---------------------------------------------------------------------------
 # Connect to OneNote
 # ---------------------------------------------------------------------------
-
 Write-Host "Connecting to OneNote desktop..."
 try {
     $onenote = New-Object -ComObject "OneNote.Application"
 } catch {
-    Write-Error "Could not connect to OneNote.`n$_`nMake sure OneNote desktop is installed and has been opened at least once."
+    Write-Error "Could not connect to OneNote. Make sure OneNote desktop is installed and has been opened at least once."
     exit 1
 }
 
 Write-Host "Fetching full hierarchy (may take a moment)..."
 $xmlStr = ""
-$onenote.GetHierarchy("", 4, [ref]$xmlStr)   # 4 = hsPages
+$onenote.GetHierarchy("", 4, [ref]$xmlStr)
 
 $doc = [xml]$xmlStr
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -63,7 +69,6 @@ $totalGroups = 0
 # ---------------------------------------------------------------------------
 # Walk notebooks
 # ---------------------------------------------------------------------------
-
 foreach ($nb in $doc.DocumentElement.ChildNodes) {
     if ($nb.LocalName -ne "Notebook") { continue }
 
@@ -76,47 +81,66 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
     $nbFolder = Remove-InvalidChars $nbName
     $config   = [ordered]@{}
 
-    # Collect all Section nodes, including those inside section groups
-    $allSections = $nb.SelectNodes(".//*") |
-                   Where-Object { $_.LocalName -eq "Section" }
+    $allNodes = $nb.SelectNodes(".//*")
+    foreach ($sec in $allNodes) {
+        if ($sec.LocalName -ne "Section") { continue }
 
-    foreach ($sec in $allSections) {
         $secName = $sec.GetAttribute("name")
-        if ([string]::IsNullOrEmpty($secName))              { continue }
-        if ($SkipSections -contains $secName.ToLower())     { continue }
+        if ([string]::IsNullOrEmpty($secName))          { continue }
+        if ($SkipSections -contains $secName.ToLower()) { continue }
 
-        $pageNodes = $sec.ChildNodes | Where-Object { $_.LocalName -eq "Page" }
-        if ($pageNodes.Count -lt $MinSectionSz)             { continue }
-
-        # Build ordered list of pages with 0-based level
-        $pages = foreach ($pg in $pageNodes) {
-            $lvlStr = $pg.GetAttribute("pageLevel")
-            [PSCustomObject]@{
-                Name  = $pg.GetAttribute("name")
-                Level = if ($lvlStr) { [int]$lvlStr - 1 } else { 0 }
+        # Collect page nodes
+        $pageNodes = @()
+        foreach ($child in $sec.ChildNodes) {
+            if ($child.LocalName -eq "Page") {
+                $pageNodes += $child
             }
+        }
+        if ($pageNodes.Count -lt $MinSectionSz) { continue }
+
+        # Build page list with 0-based level
+        $pages = @()
+        foreach ($pg in $pageNodes) {
+            $lvlStr = $pg.GetAttribute("pageLevel")
+            $lvl    = 0
+            if (-not [string]::IsNullOrEmpty($lvlStr)) {
+                $lvl = [int]$lvlStr - 1
+            }
+            $obj = New-Object PSObject -Property @{
+                Name  = $pg.GetAttribute("name")
+                Level = $lvl
+            }
+            $pages += $obj
         }
 
         # Group level-1+ pages under the preceding level-0 parent
         $groups  = [ordered]@{}
-        $other   = [System.Collections.Generic.List[string]]::new()
+        $other   = New-Object System.Collections.Generic.List[string]
         $current = $null
 
         foreach ($p in $pages) {
             if ($p.Level -eq 0) {
                 $current = $p.Name
                 if (-not $groups.Contains($current)) {
-                    $groups[$current] = [System.Collections.Generic.List[string]]::new()
+                    $groups[$current] = New-Object System.Collections.Generic.List[string]
                 }
             } else {
-                if ($current) { $groups[$current].Add($p.Name) }
-                else          { $other.Add($p.Name) }
+                if ($null -ne $current) {
+                    $groups[$current].Add($p.Name)
+                } else {
+                    $other.Add($p.Name)
+                }
             }
         }
 
-        # Childless level-0 pages have no sub-group — move them to Other
-        $childless = @($groups.Keys | Where-Object { $groups[$_].Count -eq 0 })
-        foreach ($k in $childless) {
+        # Move childless level-0 pages to Other
+        $childlessKeys = @()
+        foreach ($k in $groups.Keys) {
+            if ($groups[$k].Count -eq 0) {
+                $childlessKeys += $k
+            }
+        }
+        foreach ($k in $childlessKeys) {
             $other.Add($k)
             $groups.Remove($k)
         }
@@ -124,7 +148,7 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
         if ($other.Count -gt 0) { $groups["Other"] = $other }
         if ($groups.Count -eq 0) { continue }
 
-        # Convert Generic Lists to plain arrays for clean JSON serialization
+        # Convert lists to plain arrays for clean JSON output
         $clean = [ordered]@{}
         foreach ($gName in $groups.Keys) {
             $clean[$gName] = @($groups[$gName])
@@ -132,8 +156,13 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
 
         $config[$secName] = $clean
 
-        $nGroups = ($clean.Keys | Where-Object { $_ -ne "Other" }).Count
-        $nOther  = if ($clean.ContainsKey("Other")) { $clean["Other"].Count } else { 0 }
+        $nOther  = 0
+        if ($clean.Contains("Other")) { $nOther = $clean["Other"].Count }
+        $nGroups = 0
+        foreach ($k in $clean.Keys) {
+            if ($k -ne "Other") { $nGroups++ }
+        }
+
         Write-Host ("  {0}: {1} group(s), {2} ungrouped" -f $secName, $nGroups, $nOther)
         $totalGroups += $nGroups
     }
@@ -143,15 +172,11 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
         continue
     }
 
-    # Write rollup_groups.json — UTF-8 without BOM (works on PS 5.1 and PS 7)
     $nbDir   = Join-Path $OutputDir $nbFolder
     New-Item -ItemType Directory -Force -Path $nbDir | Out-Null
     $outFile = Join-Path $nbDir "rollup_groups.json"
     $json    = $config | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText(
-        $outFile, $json,
-        [System.Text.UTF8Encoding]::new($false)   # $false = no BOM
-    )
+    [System.IO.File]::WriteAllText($outFile, $json, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "  Written: $outFile"
     $totalNb++
 }
@@ -159,7 +184,6 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
-
 Write-Host ""
 Write-Host ("=" * 60)
 Write-Host "  EXPORT COMPLETE"
@@ -170,7 +194,7 @@ Write-Host ("=" * 60)
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Copy each rollup_groups.json to Mac Dropbox:"
-Write-Host "       Dropbox/Business/OneNote/01_Raw_Audit/{Notebook}/rollup_groups.json"
+Write-Host "       01_Raw_Audit/{Notebook}/rollup_groups.json"
 Write-Host ""
 Write-Host "  2. SCP each file to Cerebro (run from Mac terminal):"
 Write-Host "       scp <Dropbox>/01_Raw_Audit/<Notebook>/rollup_groups.json lab-user@10.254.254.48:Onenote-archivist/onenote_audit/01_Raw_Audit/<Notebook>/"
