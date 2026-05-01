@@ -25,6 +25,14 @@ $ErrorActionPreference = "Stop"
 $SkipSections = @("candidates")
 $MinSectionSz = 4   # ignore sections with fewer pages than this
 
+function Remove-InvalidChars([string]$Name) {
+    $result = $Name
+    foreach ($c in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $result = $result.Replace([string]$c, '')
+    }
+    return $result.Trim()
+}
+
 Write-Host ("=" * 60)
 Write-Host "  export_onenote_hierarchy.ps1 — OneNote COM export"
 Write-Host ("=" * 60)
@@ -65,7 +73,7 @@ foreach ($nb in $doc.DocumentElement.ChildNodes) {
     Write-Host ""
     Write-Host "Notebook: $nbName"
 
-    $nbFolder = $nbName -replace '[\\/*?:"<>|]', ''
+    $nbFolder = Remove-InvalidChars $nbName
     $config   = [ordered]@{}
 
     # Collect all Section nodes, including those inside section groups
